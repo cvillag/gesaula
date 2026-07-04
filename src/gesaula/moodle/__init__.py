@@ -1,0 +1,2 @@
+"""Comunicación con Moodle."""
+
