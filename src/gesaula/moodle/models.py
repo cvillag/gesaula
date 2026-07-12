@@ -1,2 +1,53 @@
 """Modelos de datos procedentes de Moodle."""
 
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class CursoMoodle:
+    """Curso encontrado en la página Mis cursos."""
+
+    id: int
+    nombre: str
+    url: str
+    imagen_url: str | None = None
+
+
+@dataclass(frozen=True)
+class FormularioLogin:
+    """Datos necesarios para reproducir el formulario de acceso."""
+
+    action: str
+    campos_ocultos: dict[str, str]
+
+
+@dataclass(frozen=True)
+class ComprobacionesLogin:
+    """Señales observadas después de enviar las credenciales."""
+
+    formulario_desaparecido: bool
+    identidad_usuario_visible: bool
+    sin_error_credenciales: bool
+    pagina_cursos_accesible: bool
+
+    @property
+    def aceptado(self) -> bool:
+        """Acepta el login únicamente si se cumplen todas las señales."""
+        return all(
+            (
+                self.formulario_desaparecido,
+                self.identidad_usuario_visible,
+                self.sin_error_credenciales,
+                self.pagina_cursos_accesible,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class ResultadoLogin:
+    """Resultado diagnóstico del intento de autenticación."""
+
+    comprobaciones: ComprobacionesLogin
+    html_cursos: str
+    url_cursos: str
+    cursos: tuple[CursoMoodle, ...]
