@@ -48,6 +48,7 @@ class PanelConexion(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._trabajos_activos: set[object] = set()
 
         etiqueta_url = QLabel("URL del Aula Virtual Moodle")
         etiqueta_url.setMinimumWidth(400)
@@ -120,7 +121,13 @@ class PanelConexion(QWidget):
         trabajo.senales.completada.connect(self.mostrar_resultado)
         trabajo.senales.fallida.connect(self.mostrar_error)
         trabajo.senales.mantenimiento.connect(self.mostrar_advertencia)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
         QThreadPool.globalInstance().start(trabajo)
+
+    def _retirar_trabajo(self, trabajo: object) -> None:
+        """Libera un trabajo una vez procesada su señal final en la interfaz."""
+        self._trabajos_activos.discard(trabajo)
 
     def mostrar_resultado(self, url_final: str) -> None:
         """Muestra que el servidor respondió correctamente."""
@@ -169,6 +176,7 @@ class PanelCredenciales(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._trabajos_activos: set[object] = set()
         self.url_aula_virtual = ""
         self._usuario_en_comprobacion = ""
 
@@ -255,7 +263,13 @@ class PanelCredenciales(QWidget):
         trabajo.senales.fallido.connect(self.mostrar_error)
         trabajo.senales.mantenimiento.connect(self.mostrar_advertencia)
         trabajo.senales.sesion_expirada.connect(self.sesion_expirada.emit)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
         QThreadPool.globalInstance().start(trabajo)
+
+    def _retirar_trabajo(self, trabajo: object) -> None:
+        """Libera un trabajo una vez procesada su señal final en la interfaz."""
+        self._trabajos_activos.discard(trabajo)
 
     def procesar_resultado_login(
         self, cliente: object, resultado: ResultadoLogin

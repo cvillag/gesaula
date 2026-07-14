@@ -22,6 +22,9 @@ from gesaula.moodle.parsers import (
     extraer_cursos_ajax,
     extraer_formulario_login,
     extraer_sesskey,
+    extraer_url_level_up,
+    extraer_usuario_id,
+    tiene_rol_profesor,
 )
 
 TIEMPO_ESPERA = 10.0
@@ -35,6 +38,7 @@ class ClienteMoodle:
         self._http = httpx.Client(follow_redirects=True, timeout=TIEMPO_ESPERA)
         self._autenticado = False
         self._cerrado = False
+        self._usuario_id: int | None = None
 
     def iniciar_sesion(self, usuario: str, contrasena: str) -> ResultadoLogin:
         """Envía el formulario real y evalúa cuatro señales de autenticación."""
@@ -57,6 +61,7 @@ class ClienteMoodle:
 
         url_cursos_solicitada = urljoin(self.url_base, "my/courses.php")
         pagina_cursos = self._get(url_cursos_solicitada, aceptar_error_http=True)
+        self._usuario_id = extraer_usuario_id(pagina_cursos.text)
 
         comprobaciones = ComprobacionesLogin(
             formulario_desaparecido=not contiene_formulario_login(
@@ -98,9 +103,31 @@ class ClienteMoodle:
             requiere_sesion=True,
         )
 
+    def usuario_es_profesor(self, curso_id: int) -> bool:
+        """Comprueba el rol del usuario en el perfil contextual del curso."""
+        self._comprobar_sesion_iniciada()
+        if self._usuario_id is None:
+            raise ErrorConexionMoodle(
+                "No se pudo identificar al usuario autenticado para comprobar su rol."
+            )
+        respuesta = self.obtener(
+            f"user/view.php?id={self._usuario_id}&course={curso_id}"
+        )
+        return tiene_rol_profesor(respuesta.text)
+
+    def obtener_url_level_up(self, curso_id: int) -> str | None:
+        """Busca en la página del curso el enlace aportado por Level up."""
+        respuesta = self.obtener(f"course/view.php?id={curso_id}")
+        return extraer_url_level_up(
+            respuesta.text,
+            str(respuesta.url),
+            curso_id,
+        )
+
     def cerrar(self) -> None:
         """Cierra conexiones y libera la sesión."""
         self._autenticado = False
+        self._usuario_id = None
         if self._cerrado:
             return
         self._cerrado = True

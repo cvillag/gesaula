@@ -1,6 +1,13 @@
 """Pruebas de parsers de Moodle."""
 
-from gesaula.moodle.parsers import extraer_cursos, extraer_cursos_ajax, extraer_sesskey
+from gesaula.moodle.parsers import (
+    extraer_cursos,
+    extraer_cursos_ajax,
+    extraer_sesskey,
+    extraer_url_level_up,
+    extraer_usuario_id,
+    tiene_rol_profesor,
+)
 
 
 def test_extrae_imagen_de_background_image_antes_que_img_generica() -> None:
@@ -171,3 +178,49 @@ def test_extrae_cursos_de_respuesta_ajax() -> None:
     assert cursos[0].imagen_url.endswith("/bd3.png")
     assert cursos[1].url == "https://aula.test/course/view.php?id=906"
     assert cursos[1].imagen_url == "data:image/svg+xml;base64,PHN2Zy8+"
+
+
+def test_extrae_usuario_id_de_configuracion_moodle() -> None:
+    html = '<script>M.cfg = {"sesskey":"abc123","userId":3876};</script>'
+
+    assert extraer_usuario_id(html) == 3876
+
+
+def test_detecta_exclusivamente_rol_profesor() -> None:
+    html_profesor = """
+    <dl><dt>Roles de curso</dt><dd><a>Profesor</a></dd></dl>
+    """
+    html_sin_edicion = """
+    <dl><dt>Roles de curso</dt><dd><a>Profesor sin permiso de edición</a></dd></dl>
+    """
+
+    assert tiene_rol_profesor(html_profesor)
+    assert not tiene_rol_profesor(html_sin_edicion)
+
+
+def test_extrae_level_up_sin_depender_del_idioma_del_bloque() -> None:
+    html = """
+    <aside class="block_xp">
+        <h5>Sube de nivel</h5>
+        <a href="/blocks/xp/index.php/report/1203">Informe</a>
+    </aside>
+    """
+
+    assert extraer_url_level_up(
+        html,
+        "https://aula.test/course/view.php?id=1203",
+        1203,
+    ) == "https://aula.test/blocks/xp/index.php/report/1203"
+
+
+def test_no_ofrece_level_up_de_otro_curso() -> None:
+    html = '<a href="/blocks/xp/index.php/report/999">Level up</a>'
+
+    assert (
+        extraer_url_level_up(
+            html,
+            "https://aula.test/course/view.php?id=1203",
+            1203,
+        )
+        is None
+    )

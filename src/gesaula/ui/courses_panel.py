@@ -32,6 +32,7 @@ class PanelCursos(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._trabajos_activos: set[object] = set()
         self.cursos: dict[int, CursoMoodle] = {}
         self._elementos: dict[int, QListWidgetItem] = {}
         self._estados_imagen: dict[int, str] = {}
@@ -56,6 +57,15 @@ class PanelCursos(QWidget):
         self.mosaico.setGridSize(QSize(ANCHO_TARJETA, ALTO_TARJETA))
         self.mosaico.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
+        )
+        # Las tarjetas se comportan como botones y abren la página del curso.
+        self.mosaico.setStyleSheet(
+            "QListWidget::item { border: 1px solid #b8c7d9; border-radius: 8px; "
+            "background: white; padding: 6px; }"
+            "QListWidget::item:hover { border: 2px solid #056bcf; "
+            "background: #f2f7fc; }"
+            "QListWidget::item:selected { border: 2px solid #056bcf; "
+            "background: #e7f1fb; color: black; }"
         )
         self.mosaico.itemClicked.connect(self._emitir_curso_seleccionado)
 
@@ -104,7 +114,13 @@ class PanelCursos(QWidget):
         trabajo.senales.imagen_cargada.connect(self.mostrar_imagen)
         trabajo.senales.estado_imagen.connect(self.mostrar_estado_imagen)
         trabajo.senales.sesion_expirada.connect(self.sesion_expirada.emit)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
         QThreadPool.globalInstance().start(trabajo)
+
+    def _retirar_trabajo(self, trabajo: object) -> None:
+        """Libera un trabajo una vez procesada su señal final en la interfaz."""
+        self._trabajos_activos.discard(trabajo)
 
     def mostrar_imagen(self, curso_id: int, datos: bytes) -> None:
         """Coloca una imagen descargada en la tarjeta correspondiente."""

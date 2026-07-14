@@ -22,6 +22,7 @@ class SenalesComprobacionUrl(QObject):
     completada = Signal(str)
     fallida = Signal(str)
     mantenimiento = Signal(str)
+    finalizada = Signal(object)
 
 
 class ComprobarUrl(QRunnable):
@@ -29,6 +30,7 @@ class ComprobarUrl(QRunnable):
 
     def __init__(self, url: str) -> None:
         super().__init__()
+        self.setAutoDelete(False)
         self.url = url
         self.senales = SenalesComprobacionUrl()
 
@@ -43,6 +45,8 @@ class ComprobarUrl(QRunnable):
             self.senales.fallida.emit(str(error))
         else:
             self.senales.completada.emit(url_final)
+        finally:
+            self.senales.finalizada.emit(self)
 
 
 class SenalesOperacionMoodle(QObject):
@@ -51,6 +55,7 @@ class SenalesOperacionMoodle(QObject):
     fallido = Signal(str)
     mantenimiento = Signal(str)
     sesion_expirada = Signal(str)
+    finalizada = Signal(object)
 
 
 class SenalesInicioSesion(SenalesOperacionMoodle):
@@ -76,6 +81,7 @@ class IniciarSesion(QRunnable):
 
     def __init__(self, url: str, usuario: str, contrasena: str) -> None:
         super().__init__()
+        self.setAutoDelete(False)
         self.url = url
         self.usuario = usuario
         self.contrasena = contrasena
@@ -94,6 +100,7 @@ class IniciarSesion(QRunnable):
             self.senales.completado.emit(cliente, resultado)
         finally:
             self.contrasena = ""
+            self.senales.finalizada.emit(self)
 
 
 class SenalesCargaImagenes(SenalesOperacionMoodle):
@@ -111,6 +118,7 @@ class CargarImagenesCursos(QRunnable):
         self, cliente: ClienteMoodle, cursos: tuple[CursoMoodle, ...]
     ) -> None:
         super().__init__()
+        self.setAutoDelete(False)
         self.cliente = cliente
         self.cursos = cursos
         self.senales = SenalesCargaImagenes()
@@ -162,6 +170,46 @@ class CargarImagenesCursos(QRunnable):
             emitir_error_moodle(self.senales, error)
         else:
             self.senales.completada.emit()
+        finally:
+            self.senales.finalizada.emit(self)
+
+
+class SenalesComprobacionRol(SenalesOperacionMoodle):
+    """Comunica si el usuario tiene rol Profesor en un curso."""
+
+    completada = Signal(int, bool, object)
+
+
+class ComprobarRolProfesor(QRunnable):
+    """Consulta el rol y las acciones del curso sin bloquear la interfaz."""
+
+    def __init__(self, cliente: ClienteMoodle, curso_id: int) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self.cliente = cliente
+        self.curso_id = curso_id
+        self.senales = SenalesComprobacionRol()
+
+    @Slot()
+    def run(self) -> None:
+        """Emite el resultado de la comprobación o el error de sesión."""
+        try:
+            es_profesor = self.cliente.usuario_es_profesor(self.curso_id)
+            url_level_up = (
+                self.cliente.obtener_url_level_up(self.curso_id)
+                if es_profesor
+                else None
+            )
+        except ErrorConexionMoodle as error:
+            emitir_error_moodle(self.senales, error)
+        else:
+            self.senales.completada.emit(
+                self.curso_id,
+                es_profesor,
+                url_level_up,
+            )
+        finally:
+            self.senales.finalizada.emit(self)
 
 
 def _decodificar_data_uri(uri: str) -> bytes | None:

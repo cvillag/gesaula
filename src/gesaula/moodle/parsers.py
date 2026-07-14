@@ -17,6 +17,10 @@ PATRON_IMAGEN_FONDO = re.compile(
     re.IGNORECASE,
 )
 PATRON_CONFIGURACION_MOODLE = re.compile(r"M\.cfg\s*=\s*(\{.*?\})\s*;", re.DOTALL)
+PATRON_INFORME_LEVEL_UP = re.compile(
+    r"/blocks/xp/index\.php/report/(?P<curso_id>\d+)/?$",
+    re.IGNORECASE,
+)
 
 
 def esta_en_mantenimiento(html: str) -> bool:
@@ -113,6 +117,58 @@ def extraer_sesskey(html: str) -> str | None:
     valores = parse_qs(urlparse(str(enlace_logout.get("href", ""))).query)
     sesskey = valores.get("sesskey", [None])[0]
     return sesskey if isinstance(sesskey, str) and sesskey else None
+
+
+def extraer_usuario_id(html: str) -> int | None:
+    """Extrae el identificador del usuario autenticado publicado en ``M.cfg``."""
+    coincidencia = PATRON_CONFIGURACION_MOODLE.search(html)
+    if coincidencia is None:
+        return None
+    try:
+        configuracion = json.loads(coincidencia.group(1))
+    except json.JSONDecodeError:
+        return None
+    usuario_id = configuracion.get("userId")
+    return usuario_id if isinstance(usuario_id, int) and usuario_id > 0 else None
+
+
+def tiene_rol_profesor(html: str) -> bool:
+    """Comprueba que el perfil del curso muestre exactamente el rol Profesor."""
+    soup = BeautifulSoup(html, "html.parser")
+    etiquetas = soup.select("dt, th, .label")
+    for etiqueta in etiquetas:
+        titulo = " ".join(etiqueta.get_text(" ", strip=True).split()).casefold()
+        if titulo.rstrip(":") not in {"rol", "roles", "roles de curso"}:
+            continue
+
+        valor = etiqueta.find_next_sibling(["dd", "td", "div"])
+        if valor is None and etiqueta.parent is not None:
+            valor = etiqueta.parent.find_next_sibling()
+        if isinstance(valor, Tag) and any(
+            " ".join(texto.split()).casefold() == "profesor"
+            for texto in valor.stripped_strings
+        ):
+            return True
+    return False
+
+
+def extraer_url_level_up(
+    html: str, url_pagina: str, curso_id: int
+) -> str | None:
+    """Devuelve el informe de Level up cuando el bloque está en el curso.
+
+    Se identifica el enlace propio del bloque en vez de buscar su título, ya
+    que Moodle puede mostrarlo como ``Level up`` o ``Sube de nivel``.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for enlace in soup.find_all("a", href=True):
+        url = urljoin(url_pagina, str(enlace["href"]))
+        coincidencia = PATRON_INFORME_LEVEL_UP.search(urlparse(url).path)
+        if coincidencia is None:
+            continue
+        if int(coincidencia.group("curso_id")) == curso_id:
+            return url
+    return None
 
 
 def extraer_cursos_ajax(datos: object, url_base: str) -> tuple[CursoMoodle, ...]:
