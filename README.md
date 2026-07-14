@@ -1,6 +1,6 @@
 # gesaula
 
-Herramienta local de escritorio para realizar acciones controladas sobre un Aula Virtual Moodle usando las credenciales del profesor.
+Herramienta local de escritorio para realizar acciones controladas sobre un Aula Virtual Moodle usando las credenciales del profesor. Primera prueba de programación asistida por agente IA.
 
 ## Objetivo inicial
 
