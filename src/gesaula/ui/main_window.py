@@ -16,8 +16,13 @@ from PySide6.QtWidgets import (
 from gesaula.moodle.models import ResultadoLogin
 from gesaula.ui.course_detail_panel import PanelDetalleCurso, crear_accion_level_up
 from gesaula.ui.courses_panel import PanelCursos
+from gesaula.ui.level_up_panel import PanelLevelUp
 from gesaula.ui.login_panel import PanelConexion, PanelCredenciales
-from gesaula.ui.workers import ComprobarRolProfesor
+from gesaula.ui.workers import (
+    ActualizarPxLevelUp,
+    CargarInformeLevelUp,
+    ComprobarRolProfesor,
+)
 
 
 class VentanaPrincipal(QMainWindow):
@@ -42,10 +47,12 @@ class VentanaPrincipal(QMainWindow):
         self.panel_credenciales = PanelCredenciales(self.paginas)
         self.panel_cursos = PanelCursos(self.paginas)
         self.panel_detalle_curso = PanelDetalleCurso(self.paginas)
+        self.panel_level_up = PanelLevelUp(self.paginas)
         self.paginas.addWidget(self.panel_conexion)
         self.paginas.addWidget(self.panel_credenciales)
         self.paginas.addWidget(self.panel_cursos)
         self.paginas.addWidget(self.panel_detalle_curso)
+        self.paginas.addWidget(self.panel_level_up)
         self.panel_conexion.url_comprobada.connect(self.mostrar_credenciales)
         self.panel_credenciales.sesion_iniciada.connect(self.conservar_sesion)
         self.panel_credenciales.sesion_expirada.connect(
@@ -54,6 +61,9 @@ class VentanaPrincipal(QMainWindow):
         self.panel_cursos.sesion_expirada.connect(self.mostrar_sesion_expirada)
         self.panel_cursos.curso_seleccionado.connect(self.mostrar_curso)
         self.panel_detalle_curso.volver_solicitado.connect(self.mostrar_cursos)
+        self.panel_detalle_curso.accion_solicitada.connect(self.mostrar_accion)
+        self.panel_level_up.volver_solicitado.connect(self.mostrar_detalle_curso)
+        self.panel_level_up.sumar_px_solicitado.connect(self.sumar_px_level_up)
 
         self.barra_sesion = QWidget(marco)
         self.barra_sesion.hide()
@@ -156,6 +166,91 @@ class VentanaPrincipal(QMainWindow):
         """Regresa al mosaico conservando cursos, imágenes y sesión."""
         self.paginas.setCurrentWidget(self.panel_cursos)
 
+    def mostrar_detalle_curso(self) -> None:
+        """Regresa desde una acción a la lista de acciones del curso."""
+        self.paginas.setCurrentWidget(self.panel_detalle_curso)
+
+    def mostrar_accion(self, identificador: str, url: str) -> None:
+        """Abre la pantalla de una acción disponible para el curso."""
+        curso = self.panel_detalle_curso.curso
+        if (
+            identificador != "level_up"
+            or curso is None
+            or self.cliente_moodle is None
+        ):
+            return
+
+        self.panel_level_up.mostrar_cargando(curso, url)
+        self.paginas.setCurrentWidget(self.panel_level_up)
+        self.resize(max(self.width(), 1050), max(self.height(), 800))
+
+        trabajo = CargarInformeLevelUp(self.cliente_moodle, curso.id, url)
+        trabajo.senales.completada.connect(self.procesar_informe_level_up)
+        trabajo.senales.fallido.connect(self.panel_level_up.mostrar_error)
+        trabajo.senales.mantenimiento.connect(self.panel_level_up.mostrar_error)
+        trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
+        QThreadPool.globalInstance().start(trabajo)
+
+    def procesar_informe_level_up(
+        self,
+        curso_id: int,
+        alumnos: object,
+    ) -> None:
+        """Muestra el informe si todavía corresponde al curso seleccionado."""
+        curso = self.panel_level_up.curso
+        if curso is None or curso.id != curso_id or not isinstance(alumnos, tuple):
+            return
+        self.panel_level_up.mostrar_alumnos(alumnos)
+
+    def sumar_px_level_up(self, alumno_id: int, puntos: int) -> None:
+        """Suma puntos al total actual y solicita a Moodle que lo guarde."""
+        curso = self.panel_level_up.curso
+        alumno = self.panel_level_up.alumnos.get(alumno_id)
+        if (
+            curso is None
+            or alumno is None
+            or alumno.context_id is None
+            or self.panel_level_up.url_informe is None
+            or self.cliente_moodle is None
+        ):
+            return
+
+        nuevo_total = alumno.px + puntos
+        self.panel_level_up.iniciar_actualizacion(alumno_id)
+        trabajo = ActualizarPxLevelUp(
+            self.cliente_moodle,
+            curso.id,
+            alumno_id,
+            alumno.context_id,
+            nuevo_total,
+            self.panel_level_up.url_informe,
+        )
+        trabajo.senales.completada.connect(self.procesar_actualizacion_px)
+        trabajo.senales.informe_actualizado.connect(
+            self.procesar_informe_level_up
+        )
+        trabajo.senales.actualizacion_fallida.connect(
+            self.panel_level_up.cancelar_actualizacion
+        )
+        trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
+        QThreadPool.globalInstance().start(trabajo)
+
+    def procesar_actualizacion_px(
+        self,
+        curso_id: int,
+        alumno_id: int,
+        nuevo_total: int,
+    ) -> None:
+        """Actualiza la tabla después de la confirmación del servidor."""
+        curso = self.panel_level_up.curso
+        if curso is None or curso.id != curso_id:
+            return
+        self.panel_level_up.completar_actualizacion(alumno_id, nuevo_total)
+
     def mostrar_sesion_expirada(self, mensaje: str) -> None:
         """Regresa al login cuando una acción detecta la sesión cerrada."""
         self._finalizar_comprobacion_rol()
@@ -164,6 +259,7 @@ class VentanaPrincipal(QMainWindow):
             self.cliente_moodle = None
         self.barra_sesion.hide()
         self.panel_detalle_curso.limpiar()
+        self.panel_level_up.limpiar()
         self.paginas.setCurrentWidget(self.panel_credenciales)
         self.panel_credenciales.mostrar_error(mensaje)
         self.panel_credenciales.entrada_contrasena.setFocus()
@@ -178,6 +274,7 @@ class VentanaPrincipal(QMainWindow):
         self.panel_credenciales.resultado.clear()
         self.panel_cursos.mostrar(())
         self.panel_detalle_curso.limpiar()
+        self.panel_level_up.limpiar()
         self.paginas.setCurrentWidget(self.panel_conexion)
         self.panel_conexion.entrada_url.setFocus()
 

@@ -212,6 +212,104 @@ class ComprobarRolProfesor(QRunnable):
             self.senales.finalizada.emit(self)
 
 
+class SenalesInformeLevelUp(SenalesOperacionMoodle):
+    """Comunica el alumnado obtenido del informe Level up."""
+
+    completada = Signal(int, object)
+
+
+class CargarInformeLevelUp(QRunnable):
+    """Descarga y analiza el informe Level up sin bloquear la interfaz."""
+
+    def __init__(
+        self,
+        cliente: ClienteMoodle,
+        curso_id: int,
+        url_informe: str,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self.cliente = cliente
+        self.curso_id = curso_id
+        self.url_informe = url_informe
+        self.senales = SenalesInformeLevelUp()
+
+    @Slot()
+    def run(self) -> None:
+        """Emite los alumnos o el error de conexión correspondiente."""
+        try:
+            alumnos = self.cliente.obtener_alumnos_level_up(self.url_informe)
+        except ErrorConexionMoodle as error:
+            emitir_error_moodle(self.senales, error)
+        else:
+            self.senales.completada.emit(self.curso_id, alumnos)
+        finally:
+            self.senales.finalizada.emit(self)
+
+
+class SenalesActualizarPxLevelUp(SenalesOperacionMoodle):
+    """Comunica el resultado de actualizar los PX de un alumno."""
+
+    completada = Signal(int, int, int)
+    informe_actualizado = Signal(int, object)
+    actualizacion_fallida = Signal(int, str)
+
+
+class ActualizarPxLevelUp(QRunnable):
+    """Envía un nuevo total de PX mediante el formulario dinámico de Moodle."""
+
+    def __init__(
+        self,
+        cliente: ClienteMoodle,
+        curso_id: int,
+        alumno_id: int,
+        context_id: int,
+        nuevo_total: int,
+        url_informe: str,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self.cliente = cliente
+        self.curso_id = curso_id
+        self.alumno_id = alumno_id
+        self.context_id = context_id
+        self.nuevo_total = nuevo_total
+        self.url_informe = url_informe
+        self.senales = SenalesActualizarPxLevelUp()
+
+    @Slot()
+    def run(self) -> None:
+        """Actualiza Moodle y conserva el total local sólo si lo confirma."""
+        try:
+            self.cliente.actualizar_px_level_up(
+                self.alumno_id,
+                self.context_id,
+                self.nuevo_total,
+            )
+        except SesionMoodleExpirada as error:
+            self.senales.sesion_expirada.emit(str(error))
+        except ErrorConexionMoodle as error:
+            self.senales.actualizacion_fallida.emit(self.alumno_id, str(error))
+        else:
+            self.senales.completada.emit(
+                self.curso_id,
+                self.alumno_id,
+                self.nuevo_total,
+            )
+            try:
+                alumnos = self.cliente.obtener_alumnos_level_up(self.url_informe)
+            except SesionMoodleExpirada as error:
+                self.senales.sesion_expirada.emit(str(error))
+            except ErrorConexionMoodle:
+                # La escritura ya fue confirmada. Conservamos el nuevo total
+                # aunque no sea posible refrescar el nivel en este momento.
+                pass
+            else:
+                self.senales.informe_actualizado.emit(self.curso_id, alumnos)
+        finally:
+            self.senales.finalizada.emit(self)
+
+
 def _decodificar_data_uri(uri: str) -> bytes | None:
     """Decodifica una imagen embebida por Moodle sin realizar una petición HTTP."""
     cabecera, separador, contenido = uri.partition(",")

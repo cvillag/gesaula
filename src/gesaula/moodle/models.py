@@ -14,6 +14,17 @@ class CursoMoodle:
 
 
 @dataclass(frozen=True)
+class AlumnoLevelUp:
+    """Alumno mostrado en el informe del bloque Level up."""
+
+    id: int
+    nombre: str
+    nivel: int
+    px: int
+    context_id: int | None = None
+
+
+@dataclass(frozen=True)
 class FormularioLogin:
     """Datos necesarios para reproducir el formulario de acceso."""
 

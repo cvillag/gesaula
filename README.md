@@ -14,11 +14,11 @@ La primera versión se centrará en:
 - Validar cursos por id.
 - Buscar cursos disponibles para el usuario.
 - Mostrar el estado de conexión, cursos accesibles y errores relevantes.
+- Consultar el informe de Level up y sumar PX al alumnado.
 
 ## Fuera de alcance inicial
 
 - API oficial de Moodle, porque el servidor de EducaMadrid la tiene restringida para este uso.
-- Automatización de LevelUp.
 - Gestión de entregas o cuestionarios.
 - Descarga o almacenamiento interno de datos de alumnado.
 - Servicio web, multiusuario o app móvil.
@@ -29,4 +29,3 @@ La primera versión se centrará en:
 La aplicación será monolítica y local, escrita en Python. La comunicación con Moodle se hará inicialmente mediante HTTP, manteniendo cookies de sesión y analizando el HTML devuelto por Moodle.
 
 Si el flujo web de Moodle requiere JavaScript o interacciones difíciles de reproducir con HTTP, se evaluará Playwright como alternativa para la capa de comunicación.
-

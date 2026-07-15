@@ -7,7 +7,7 @@ from urllib.parse import parse_qs, urljoin, urlparse
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from gesaula.moodle.models import CursoMoodle, FormularioLogin
+from gesaula.moodle.models import AlumnoLevelUp, CursoMoodle, FormularioLogin
 
 MENSAJE_MANTENIMIENTO = (
     "Este sitio está en fase de mantenimiento y no está disponible en este momento"
@@ -171,6 +171,59 @@ def extraer_url_level_up(
     return None
 
 
+def extraer_alumnos_level_up(html: str) -> tuple[AlumnoLevelUp, ...]:
+    """Extrae los alumnos del informe sin depender de identificadores YUI."""
+    soup = BeautifulSoup(html, "html.parser")
+    tabla = soup.select_one("table.block_xp-report-table")
+    if tabla is None:
+        return ()
+
+    alumnos: list[AlumnoLevelUp] = []
+    for fila in tabla.select("tbody tr"):
+        celda_nombre = fila.select_one("td.c1")
+        celda_nivel = fila.select_one("td.c2")
+        celda_px = fila.select_one("td.c3")
+        if celda_nombre is None or celda_nivel is None or celda_px is None:
+            continue
+
+        nombre = " ".join(celda_nombre.get_text(" ", strip=True).split())
+        nivel = _extraer_entero(celda_nivel.get_text(" ", strip=True))
+        puntos = celda_px.select_one(".pts")
+        px = _extraer_entero(
+            (puntos or celda_px).get_text(" ", strip=True)
+        )
+        enlace_usuario = celda_nombre.find("a", href=True)
+        if not nombre or nivel is None or px is None or enlace_usuario is None:
+            # Moodle incluye una fila vacía que JavaScript utiliza como plantilla.
+            continue
+        valores_id = parse_qs(urlparse(str(enlace_usuario["href"])).query).get(
+            "id", []
+        )
+        if not valores_id or not valores_id[0].isdigit():
+            continue
+
+        enlace_editar = fila.select_one(
+            '[data-xp-action="open-form"][data-form-args__contextid]'
+        )
+        context_id_texto = (
+            str(enlace_editar.get("data-form-args__contextid", ""))
+            if enlace_editar is not None
+            else ""
+        )
+        alumnos.append(
+            AlumnoLevelUp(
+                id=int(valores_id[0]),
+                nombre=nombre,
+                nivel=nivel,
+                px=px,
+                context_id=(
+                    int(context_id_texto) if context_id_texto.isdigit() else None
+                ),
+            )
+        )
+    return tuple(alumnos)
+
+
 def extraer_cursos_ajax(datos: object, url_base: str) -> tuple[CursoMoodle, ...]:
     """Convierte la respuesta estructurada del servicio AJAX de Moodle."""
     if not isinstance(datos, dict) or not isinstance(datos.get("courses"), list):
@@ -310,3 +363,9 @@ def _extraer_url_imagen_fondo(style: str) -> str | None:
     if not url_imagen or url_imagen.casefold() == "none":
         return None
     return url_imagen
+
+
+def _extraer_entero(texto: str) -> int | None:
+    """Convierte cantidades Moodle aunque incluyan separadores de millares."""
+    digitos = "".join(caracter for caracter in texto if caracter.isdigit())
+    return int(digitos) if digitos else None

@@ -1,6 +1,6 @@
 """Cliente Moodle basado en una sesión web persistente."""
 
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 
 import httpx
 
@@ -10,7 +10,12 @@ from gesaula.moodle.errors import (
     MoodleEnMantenimiento,
     SesionMoodleExpirada,
 )
-from gesaula.moodle.models import ComprobacionesLogin, CursoMoodle, ResultadoLogin
+from gesaula.moodle.models import (
+    AlumnoLevelUp,
+    ComprobacionesLogin,
+    CursoMoodle,
+    ResultadoLogin,
+)
 from gesaula.moodle.parsers import (
     MENSAJE_MANTENIMIENTO,
     contiene_error_credenciales,
@@ -18,6 +23,7 @@ from gesaula.moodle.parsers import (
     contiene_formulario_login,
     contiene_identidad_usuario,
     esta_en_mantenimiento,
+    extraer_alumnos_level_up,
     extraer_cursos,
     extraer_cursos_ajax,
     extraer_formulario_login,
@@ -39,6 +45,7 @@ class ClienteMoodle:
         self._autenticado = False
         self._cerrado = False
         self._usuario_id: int | None = None
+        self._sesskey: str | None = None
 
     def iniciar_sesion(self, usuario: str, contrasena: str) -> ResultadoLogin:
         """Envía el formulario real y evalúa cuatro señales de autenticación."""
@@ -62,6 +69,7 @@ class ClienteMoodle:
         url_cursos_solicitada = urljoin(self.url_base, "my/courses.php")
         pagina_cursos = self._get(url_cursos_solicitada, aceptar_error_http=True)
         self._usuario_id = extraer_usuario_id(pagina_cursos.text)
+        self._sesskey = extraer_sesskey(pagina_cursos.text)
 
         comprobaciones = ComprobacionesLogin(
             formulario_desaparecido=not contiene_formulario_login(
@@ -124,10 +132,46 @@ class ClienteMoodle:
             curso_id,
         )
 
+    def obtener_alumnos_level_up(self, url_informe: str) -> tuple[AlumnoLevelUp, ...]:
+        """Obtiene nombre, nivel y puntos de los alumnos del informe."""
+        respuesta = self.obtener(url_informe)
+        return extraer_alumnos_level_up(respuesta.text)
+
+    def actualizar_px_level_up(
+        self,
+        alumno_id: int,
+        context_id: int,
+        nuevo_total: int,
+    ) -> None:
+        """Actualiza directamente el total mediante el formulario dinámico Moodle."""
+        if nuevo_total < 0:
+            raise ValueError("El total de PX no puede ser negativo.")
+        datos_formulario = urlencode(
+            {
+                "contextid": str(context_id),
+                "userid": str(alumno_id),
+                "sesskey": self._obtener_sesskey(),
+                "_qf__block_xp_form_user_xp": "1",
+                "xp": str(nuevo_total),
+            }
+        )
+        resultado = self._llamar_ajax(
+            "core_form_dynamic_form",
+            {
+                "formdata": datos_formulario,
+                "form": r"block_xp\form\user_xp",
+            },
+        )
+        if not isinstance(resultado, dict) or resultado.get("submitted") is not True:
+            raise ErrorConexionMoodle(
+                "Moodle no aceptó la actualización de PX. No se realizó ningún cambio."
+            )
+
     def cerrar(self) -> None:
         """Cierra conexiones y libera la sesión."""
         self._autenticado = False
         self._usuario_id = None
+        self._sesskey = None
         if self._cerrado:
             return
         self._cerrado = True
@@ -177,6 +221,51 @@ class ClienteMoodle:
             requiere_sesion=True,
         )
         return respuesta
+
+    def _llamar_ajax(self, metodo: str, argumentos: dict[str, object]) -> object:
+        """Invoca un método AJAX Moodle usando la sesión autenticada."""
+        self._comprobar_sesion_iniciada()
+        sesskey = self._obtener_sesskey()
+        url = urljoin(
+            self.url_base,
+            f"lib/ajax/service.php?sesskey={sesskey}&info={metodo}",
+        )
+        respuesta = self._post_json(
+            url,
+            [{"index": 0, "methodname": metodo, "args": argumentos}],
+        )
+        try:
+            mensajes = respuesta.json()
+        except ValueError as error:
+            raise ErrorConexionMoodle(
+                "Moodle devolvió una respuesta AJAX no válida."
+            ) from error
+        if not isinstance(mensajes, list) or not mensajes:
+            raise ErrorConexionMoodle("Moodle devolvió una respuesta AJAX vacía.")
+        mensaje = mensajes[0]
+        if not isinstance(mensaje, dict):
+            raise ErrorConexionMoodle("Moodle devolvió una respuesta AJAX no válida.")
+        if mensaje.get("error"):
+            excepcion = mensaje.get("exception")
+            detalle = (
+                excepcion.get("message")
+                if isinstance(excepcion, dict)
+                and isinstance(excepcion.get("message"), str)
+                else None
+            )
+            raise ErrorConexionMoodle(
+                detalle or "Moodle rechazó la solicitud de actualización."
+            )
+        return mensaje.get("data")
+
+    def _obtener_sesskey(self) -> str:
+        """Devuelve la clave CSRF de la sesión activa."""
+        self._comprobar_sesion_iniciada()
+        if self._sesskey is None:
+            raise ErrorConexionMoodle(
+                "No se pudo obtener la clave de sesión necesaria para actualizar Moodle."
+            )
+        return self._sesskey
 
     def _obtener_cursos_ajax(self, html_cursos: str) -> tuple[CursoMoodle, ...]:
         """Obtiene todos los cursos mediante el servicio usado por el dashboard."""

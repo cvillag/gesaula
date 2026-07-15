@@ -1,7 +1,9 @@
 """Pruebas de los trabajos en segundo plano."""
 
 from gesaula.ui.workers import (
+    ActualizarPxLevelUp,
     CargarImagenesCursos,
+    CargarInformeLevelUp,
     ComprobarRolProfesor,
     ComprobarUrl,
     IniciarSesion,
@@ -29,6 +31,15 @@ def test_qt_no_autodestruye_trabajos_antes_de_procesar_sus_senales() -> None:
         IniciarSesion("https://aula.test", "usuario", "secreto"),
         CargarImagenesCursos(cliente, ()),  # type: ignore[arg-type]
         ComprobarRolProfesor(cliente, 1203),  # type: ignore[arg-type]
+        CargarInformeLevelUp(cliente, 1203, "https://aula.test/informe"),  # type: ignore[arg-type]
+        ActualizarPxLevelUp(
+            cliente,
+            1203,
+            42,
+            85744,
+            150,
+            "https://aula.test/informe",
+        ),  # type: ignore[arg-type]
     )
 
     assert all(not trabajo.autoDelete() for trabajo in trabajos)

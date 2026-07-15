@@ -1,6 +1,7 @@
 """Pruebas de parsers de Moodle."""
 
 from gesaula.moodle.parsers import (
+    extraer_alumnos_level_up,
     extraer_cursos,
     extraer_cursos_ajax,
     extraer_sesskey,
@@ -224,3 +225,41 @@ def test_no_ofrece_level_up_de_otro_curso() -> None:
         )
         is None
     )
+
+
+def test_extrae_alumnos_del_informe_level_up_y_descarta_fila_plantilla() -> None:
+    html = """
+    <table class="flexible block_xp-report-table" id="yui_id_variable">
+      <thead><tr><th></th><th>Nombre</th><th>Nivel</th><th>Total</th></tr></thead>
+      <tbody>
+        <tr id="block_xp_report_r0">
+          <td class="c0"></td>
+          <td class="c1"><a href="/user/view.php?id=42&amp;course=1203">Ana Ejemplo</a></td>
+          <td class="c2">3</td>
+          <td class="c3"><span class="block_xp-xp"><span class="pts">1.250</span> xp</span></td>
+          <td class="c5"><a data-xp-action="open-form"
+            data-form-args__contextid="85744">Editar</a></td>
+        </tr>
+        <tr><td class="c0"></td><td class="c1"></td><td class="c2"></td><td class="c3"></td></tr>
+      </tbody>
+    </table>
+    """
+
+    (alumno,) = extraer_alumnos_level_up(html)
+
+    assert alumno.id == 42
+    assert alumno.nombre == "Ana Ejemplo"
+    assert alumno.nivel == 3
+    assert alumno.px == 1250
+    assert alumno.context_id == 85744
+
+
+def test_no_confunde_otra_tabla_con_el_informe_level_up() -> None:
+    html = """
+    <table><tbody><tr>
+      <td class="c1"><a href="/user/view.php?id=42">Otro dato</a></td>
+      <td class="c2">3</td><td class="c3">100</td>
+    </tr></tbody></table>
+    """
+
+    assert extraer_alumnos_level_up(html) == ()
