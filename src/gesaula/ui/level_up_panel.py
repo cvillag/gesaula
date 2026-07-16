@@ -5,11 +5,13 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -17,7 +19,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gesaula.actions.calificaciones_ods import (
+    ErrorArchivoCalificaciones,
+    InformeCalificaciones,
+    SeleccionCalificaciones,
+    leer_calificaciones_ods,
+)
 from gesaula.moodle.models import AlumnoLevelUp, CursoMoodle
+from gesaula.ui.grades_dialog import DialogoCalificaciones
 
 PUNTOS_DISPONIBLES = (10, 50, 100, 200, 400, 600, 800, 1000)
 FILAS_VISIBLES = 15
@@ -29,12 +38,15 @@ class PanelLevelUp(QWidget):
 
     volver_solicitado = Signal()
     sumar_px_solicitado = Signal(int, int)
+    calificaciones_solicitadas = Signal(object, object, object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.curso: CursoMoodle | None = None
         self.url_informe: str | None = None
         self.archivo_seleccionado: Path | None = None
+        self.informe_calificaciones: InformeCalificaciones | None = None
+        self.seleccion_calificaciones: SeleccionCalificaciones | None = None
         self.alumnos: dict[int, AlumnoLevelUp] = {}
         self._fila_por_alumno: dict[int, int] = {}
 
@@ -80,6 +92,8 @@ class PanelLevelUp(QWidget):
         self.nombre_archivo.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
+        self.estado_archivo = QLabel()
+        self.estado_archivo.setWordWrap(True)
 
         disposicion_archivo = QHBoxLayout()
         disposicion_archivo.addWidget(self.boton_archivo)
@@ -95,6 +109,7 @@ class PanelLevelUp(QWidget):
         disposicion.addWidget(self.tabla)
         disposicion.addWidget(separador)
         disposicion.addLayout(disposicion_archivo)
+        disposicion.addWidget(self.estado_archivo)
         disposicion.addStretch()
         disposicion.addWidget(
             self.boton_volver,
@@ -106,6 +121,8 @@ class PanelLevelUp(QWidget):
         self.curso = curso
         self.url_informe = url_informe
         self.archivo_seleccionado = None
+        self.informe_calificaciones = None
+        self.seleccion_calificaciones = None
         self.titulo.setText(f"Level up — {curso.nombre}")
         self.estado.setStyleSheet("")
         self.estado.setText("Cargando alumnado…")
@@ -115,6 +132,7 @@ class PanelLevelUp(QWidget):
         self._fila_por_alumno.clear()
         self.nombre_archivo.setText("Ningún archivo seleccionado")
         self.nombre_archivo.setToolTip("")
+        self.estado_archivo.clear()
 
     def mostrar_alumnos(self, alumnos: tuple[AlumnoLevelUp, ...]) -> None:
         """Rellena la tabla con los datos obtenidos de Moodle."""
@@ -180,6 +198,8 @@ class PanelLevelUp(QWidget):
         self.curso = None
         self.url_informe = None
         self.archivo_seleccionado = None
+        self.informe_calificaciones = None
+        self.seleccion_calificaciones = None
         self.titulo.clear()
         self.estado.clear()
         self.estado.setStyleSheet("")
@@ -188,24 +208,66 @@ class PanelLevelUp(QWidget):
         self._fila_por_alumno.clear()
         self.nombre_archivo.setText("Ningún archivo seleccionado")
         self.nombre_archivo.setToolTip("")
+        self.estado_archivo.clear()
+        self.estado_archivo.setStyleSheet("")
 
     def seleccionar_archivo(self) -> None:
         """Permite elegir el archivo que se procesará en una fase posterior."""
         ruta, _ = QFileDialog.getOpenFileName(
             self,
-            "Seleccionar archivo",
+            "Seleccionar archivo de calificaciones",
             str(
                 self.archivo_seleccionado.parent
                 if self.archivo_seleccionado
                 else Path.home()
             ),
-            "Todos los archivos (*)",
+            "Hojas de cálculo OpenDocument (*.ods)",
         )
         if not ruta:
             return
+        try:
+            informe = leer_calificaciones_ods(ruta)
+        except ErrorArchivoCalificaciones as error:
+            QMessageBox.warning(
+                self,
+                "Archivo de calificaciones no válido",
+                str(error),
+            )
+            return
+
         self.archivo_seleccionado = Path(ruta)
+        self.informe_calificaciones = informe
+        self.seleccion_calificaciones = None
         self.nombre_archivo.setText(str(self.archivo_seleccionado))
         self.nombre_archivo.setToolTip(str(self.archivo_seleccionado))
+        self.estado_archivo.setStyleSheet("")
+        self.estado_archivo.setText(
+            f"Archivo analizado: {len(informe.alumnos)} alumnos y "
+            f"{len(informe.columnas)} columnas de calificación."
+        )
+
+        dialogo = DialogoCalificaciones(informe, self)
+        dialogo.aplicar_solicitado.connect(
+            lambda seleccion: self.calificaciones_solicitadas.emit(
+                informe,
+                seleccion,
+                dialogo,
+            )
+        )
+        if dialogo.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialogo.seleccion is None or not dialogo.proceso_completado:
+            return
+        self.seleccion_calificaciones = dialogo.seleccion
+        nombres = ", ".join(
+            columna.nombre for columna in dialogo.seleccion.columnas
+        )
+        self.estado_archivo.setStyleSheet("color: #16752c;")
+        self.estado_archivo.setText(
+            f"Aplicadas {len(dialogo.seleccion.columnas)} columnas con "
+            f"multiplicador {dialogo.seleccion.multiplicador:g}: {nombres}. "
+            "Actualización completada."
+        )
 
     def _crear_botones(self, alumno: AlumnoLevelUp) -> QWidget:
         contenedor = QWidget()

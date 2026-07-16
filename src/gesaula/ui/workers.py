@@ -6,6 +6,12 @@ from urllib.parse import unquote_to_bytes
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
+from gesaula.actions.calificaciones_ods import (
+    ErrorPreparacionCalificaciones,
+    InformeCalificaciones,
+    SeleccionCalificaciones,
+    preparar_plan_calificaciones,
+)
 from gesaula.moodle.client import ClienteMoodle
 from gesaula.moodle.errors import (
     ErrorConexionMoodle,
@@ -306,6 +312,94 @@ class ActualizarPxLevelUp(QRunnable):
                 pass
             else:
                 self.senales.informe_actualizado.emit(self.curso_id, alumnos)
+        finally:
+            self.senales.finalizada.emit(self)
+
+
+class SenalesAplicarCalificaciones(SenalesOperacionMoodle):
+    """Comunica el avance de una actualización de PX por lotes."""
+
+    preparada = Signal(int, int)
+    progreso = Signal(int, int, str)
+    completada = Signal(int, int)
+    preparacion_fallida = Signal(str)
+    aplicacion_fallida = Signal(str)
+
+
+class AplicarCalificacionesLevelUp(QRunnable):
+    """Actualiza secuencialmente los PX calculados desde calificaciones."""
+
+    def __init__(
+        self,
+        cliente: ClienteMoodle,
+        curso_id: int,
+        url_informe: str,
+        informe: InformeCalificaciones,
+        seleccion: SeleccionCalificaciones,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self.cliente = cliente
+        self.curso_id = curso_id
+        self.url_informe = url_informe
+        self.informe = informe
+        self.seleccion = seleccion
+        self.senales = SenalesAplicarCalificaciones()
+
+    @Slot()
+    def run(self) -> None:
+        """Detiene el lote ante el primer error para evitar resultados inciertos."""
+        try:
+            alumnos_level_up = self.cliente.obtener_alumnos_level_up(
+                self.url_informe
+            )
+        except SesionMoodleExpirada as error:
+            self.senales.sesion_expirada.emit(str(error))
+            self.senales.finalizada.emit(self)
+            return
+        except ErrorConexionMoodle as error:
+            self.senales.preparacion_fallida.emit(str(error))
+            self.senales.finalizada.emit(self)
+            return
+        try:
+            plan = preparar_plan_calificaciones(
+                self.informe,
+                self.seleccion,
+                alumnos_level_up,
+            )
+        except ErrorPreparacionCalificaciones as error:
+            self.senales.preparacion_fallida.emit(str(error))
+            self.senales.finalizada.emit(self)
+            return
+
+        total = len(plan.incrementos)
+        procesados = 0
+        self.senales.preparada.emit(total, plan.alumnos_sin_calificacion)
+        try:
+            for incremento in plan.incrementos:
+                try:
+                    self.cliente.actualizar_px_level_up(
+                        incremento.alumno_id,
+                        incremento.context_id,
+                        incremento.nuevo_total,
+                    )
+                except SesionMoodleExpirada as error:
+                    self.senales.sesion_expirada.emit(str(error))
+                    return
+                except ErrorConexionMoodle as error:
+                    self.senales.aplicacion_fallida.emit(
+                        f"Proceso detenido tras {procesados} de {total}. "
+                        f"No se pudo actualizar a {incremento.nombre}: {error} "
+                        "Los cambios anteriores sí se guardaron."
+                    )
+                    return
+                procesados += 1
+                self.senales.progreso.emit(
+                    procesados,
+                    total,
+                    incremento.nombre,
+                )
+            self.senales.completada.emit(self.curso_id, procesados)
         finally:
             self.senales.finalizada.emit(self)
 

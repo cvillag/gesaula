@@ -13,13 +13,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gesaula.actions.calificaciones_ods import (
+    InformeCalificaciones,
+    SeleccionCalificaciones,
+)
 from gesaula.moodle.models import ResultadoLogin
 from gesaula.ui.course_detail_panel import PanelDetalleCurso, crear_accion_level_up
 from gesaula.ui.courses_panel import PanelCursos
+from gesaula.ui.grades_dialog import DialogoCalificaciones
 from gesaula.ui.level_up_panel import PanelLevelUp
 from gesaula.ui.login_panel import PanelConexion, PanelCredenciales
 from gesaula.ui.workers import (
     ActualizarPxLevelUp,
+    AplicarCalificacionesLevelUp,
     CargarInformeLevelUp,
     ComprobarRolProfesor,
 )
@@ -35,6 +41,7 @@ class VentanaPrincipal(QMainWindow):
         self.cliente_moodle = None
         self._curso_comprobando: int | None = None
         self._trabajos_activos: set[object] = set()
+        self._dialogo_calificaciones_activo: DialogoCalificaciones | None = None
 
         marco = QFrame(self)
         marco.setObjectName("marcoPrincipal")
@@ -64,6 +71,9 @@ class VentanaPrincipal(QMainWindow):
         self.panel_detalle_curso.accion_solicitada.connect(self.mostrar_accion)
         self.panel_level_up.volver_solicitado.connect(self.mostrar_detalle_curso)
         self.panel_level_up.sumar_px_solicitado.connect(self.sumar_px_level_up)
+        self.panel_level_up.calificaciones_solicitadas.connect(
+            self.aplicar_calificaciones_level_up
+        )
 
         self.barra_sesion = QWidget(marco)
         self.barra_sesion.hide()
@@ -250,6 +260,100 @@ class VentanaPrincipal(QMainWindow):
         if curso is None or curso.id != curso_id:
             return
         self.panel_level_up.completar_actualizacion(alumno_id, nuevo_total)
+
+    def aplicar_calificaciones_level_up(
+        self,
+        informe: object,
+        seleccion: object,
+        dialogo: object,
+    ) -> None:
+        """Valida las coincidencias y comienza la actualización secuencial."""
+        curso = self.panel_level_up.curso
+        url_informe = self.panel_level_up.url_informe
+        if (
+            not isinstance(informe, InformeCalificaciones)
+            or not isinstance(seleccion, SeleccionCalificaciones)
+            or not isinstance(dialogo, DialogoCalificaciones)
+            or curso is None
+            or url_informe is None
+            or self.cliente_moodle is None
+        ):
+            return
+
+        self._dialogo_calificaciones_activo = dialogo
+        dialogo.finished.connect(self._finalizar_dialogo_calificaciones)
+        dialogo.iniciar_preparacion()
+        trabajo = AplicarCalificacionesLevelUp(
+            self.cliente_moodle,
+            curso.id,
+            url_informe,
+            informe,
+            seleccion,
+        )
+        trabajo.senales.preparada.connect(dialogo.iniciar_proceso)
+        trabajo.senales.preparacion_fallida.connect(
+            dialogo.mostrar_error_preparacion
+        )
+        trabajo.senales.progreso.connect(self.actualizar_progreso_calificaciones)
+        trabajo.senales.completada.connect(self.completar_calificaciones_level_up)
+        trabajo.senales.aplicacion_fallida.connect(
+            self.fallar_calificaciones_level_up
+        )
+        trabajo.senales.sesion_expirada.connect(dialogo.reject)
+        trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
+        QThreadPool.globalInstance().start(trabajo)
+
+    def actualizar_progreso_calificaciones(
+        self,
+        procesados: int,
+        total: int,
+        nombre: str,
+    ) -> None:
+        """Actualiza la barra tras cada escritura confirmada."""
+        if self._dialogo_calificaciones_activo is not None:
+            self._dialogo_calificaciones_activo.actualizar_progreso(
+                procesados,
+                total,
+                nombre,
+            )
+
+    def completar_calificaciones_level_up(
+        self,
+        curso_id: int,
+        procesados: int,
+    ) -> None:
+        """Cierra el diálogo completo y recarga los datos de Level up."""
+        curso = self.panel_level_up.curso
+        if curso is None or curso.id != curso_id:
+            return
+        if self._dialogo_calificaciones_activo is not None:
+            self._dialogo_calificaciones_activo.completar_proceso()
+        self._recargar_informe_level_up()
+
+    def fallar_calificaciones_level_up(self, mensaje: str) -> None:
+        """Muestra el progreso parcial y refresca los cambios ya confirmados."""
+        if self._dialogo_calificaciones_activo is not None:
+            self._dialogo_calificaciones_activo.mostrar_error_proceso(mensaje)
+        self._recargar_informe_level_up()
+
+    def _recargar_informe_level_up(self) -> None:
+        curso = self.panel_level_up.curso
+        url = self.panel_level_up.url_informe
+        if curso is None or url is None or self.cliente_moodle is None:
+            return
+        trabajo = CargarInformeLevelUp(self.cliente_moodle, curso.id, url)
+        trabajo.senales.completada.connect(self.procesar_informe_level_up)
+        trabajo.senales.fallido.connect(self.panel_level_up.mostrar_error)
+        trabajo.senales.mantenimiento.connect(self.panel_level_up.mostrar_error)
+        trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
+        QThreadPool.globalInstance().start(trabajo)
+
+    def _finalizar_dialogo_calificaciones(self, resultado: int) -> None:
+        self._dialogo_calificaciones_activo = None
 
     def mostrar_sesion_expirada(self, mensaje: str) -> None:
         """Regresa al login cuando una acción detecta la sesión cerrada."""
