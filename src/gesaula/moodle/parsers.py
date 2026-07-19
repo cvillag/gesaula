@@ -2,12 +2,20 @@
 
 import json
 import re
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from gesaula.moodle.models import AlumnoLevelUp, CursoMoodle, FormularioLogin
+from gesaula.moodle.models import (
+    ActividadDescargable,
+    AdjuntoRevision,
+    AlumnoLevelUp,
+    CursoMoodle,
+    EntregaTarea,
+    FormularioLogin,
+    IntentoCuestionario,
+)
 
 MENSAJE_MANTENIMIENTO = (
     "Este sitio está en fase de mantenimiento y no está disponible en este momento"
@@ -19,6 +27,18 @@ PATRON_IMAGEN_FONDO = re.compile(
 PATRON_CONFIGURACION_MOODLE = re.compile(r"M\.cfg\s*=\s*(\{.*?\})\s*;", re.DOTALL)
 PATRON_INFORME_LEVEL_UP = re.compile(
     r"/blocks/xp/index\.php/report/(?P<curso_id>\d+)/?$",
+    re.IGNORECASE,
+)
+TIPOS_ACTIVIDAD_DESCARGABLE = {
+    "quiz": "Cuestionario",
+    "workshop": "Taller",
+    "data": "Base de datos",
+    "geogebra": "GeoGebra",
+    "glossary": "Glosario",
+    "assign": "Tarea",
+}
+PATRON_ACTIVIDAD_DESCARGABLE = re.compile(
+    r"/mod/(?P<modulo>quiz|workshop|data|geogebra|glossary|assign)/view\.php$",
     re.IGNORECASE,
 )
 
@@ -224,6 +244,357 @@ def extraer_alumnos_level_up(html: str) -> tuple[AlumnoLevelUp, ...]:
     return tuple(alumnos)
 
 
+def extraer_actividades_descargables(
+    html: str,
+    url_pagina: str,
+) -> tuple[ActividadDescargable, ...]:
+    """Extrae actividades almacenables sin depender del tema de Moodle."""
+    soup = BeautifulSoup(html, "html.parser")
+    actividades: dict[int, ActividadDescargable] = {}
+    for enlace in soup.find_all("a", href=True):
+        url = urljoin(url_pagina, str(enlace["href"]))
+        partes = urlparse(url)
+        coincidencia = PATRON_ACTIVIDAD_DESCARGABLE.search(partes.path)
+        if coincidencia is None:
+            continue
+        valores_id = parse_qs(partes.query).get("id", [])
+        if not valores_id or not valores_id[0].isdigit():
+            continue
+        actividad_id = int(valores_id[0])
+        if actividad_id in actividades:
+            continue
+
+        nombre = _extraer_texto_visible(enlace)
+        if not nombre:
+            nombre = " ".join(
+                str(enlace.get("title") or enlace.get("aria-label") or "").split()
+            )
+        if not nombre:
+            continue
+        modulo = coincidencia.group("modulo").casefold()
+        actividades[actividad_id] = ActividadDescargable(
+            id=actividad_id,
+            nombre=nombre,
+            tipo=TIPOS_ACTIVIDAD_DESCARGABLE[modulo],
+            url=url,
+        )
+    return tuple(actividades.values())
+
+
+def extraer_intentos_cuestionario(
+    html: str,
+    url_pagina: str,
+) -> tuple[IntentoCuestionario, ...]:
+    """Extrae intentos revisables del informe general del cuestionario."""
+    soup = BeautifulSoup(html, "html.parser")
+    intentos: dict[int, IntentoCuestionario] = {}
+    for enlace_revision in soup.find_all(
+        "a",
+        href=lambda href: href and "/mod/quiz/review.php" in href,
+    ):
+        url_revision = urljoin(url_pagina, str(enlace_revision["href"]))
+        valores_intento = parse_qs(urlparse(url_revision).query).get("attempt", [])
+        if not valores_intento or not valores_intento[0].isdigit():
+            continue
+        intento_id = int(valores_intento[0])
+        if intento_id in intentos:
+            continue
+
+        fila = enlace_revision.find_parent("tr")
+        if fila is None:
+            continue
+        enlaces_usuario = fila.find_all(
+            "a",
+            href=lambda href: href
+            and (
+                "/user/view.php" in href
+                or "/user/profile.php" in href
+            ),
+        )
+        alumno_id: int | None = None
+        for enlace_usuario in enlaces_usuario:
+            valores_usuario = parse_qs(
+                urlparse(str(enlace_usuario.get("href", ""))).query
+            ).get("id", [])
+            if valores_usuario and valores_usuario[0].isdigit():
+                alumno_id = int(valores_usuario[0])
+                break
+        alumno = _extraer_nombre_completo_alumno(fila, enlaces_usuario)
+        if not alumno:
+            continue
+        intentos[intento_id] = IntentoCuestionario(
+            id=intento_id,
+            alumno_id=alumno_id,
+            alumno=alumno,
+            url_revision=url_revision,
+        )
+    return tuple(intentos.values())
+
+
+def _extraer_nombre_completo_alumno(
+    fila: Tag,
+    enlaces_usuario: list[Tag],
+) -> str:
+    """Prioriza el nombre completo frente al avatar o textos abreviados."""
+    celda_nombre = fila.select_one(
+        "td.fullname, td[data-field='fullname'], td.userfullname"
+    )
+    if celda_nombre is not None:
+        candidatos_celda = [
+            _extraer_texto_visible(enlace)
+            for enlace in celda_nombre.find_all("a")
+        ]
+        candidatos_celda = [
+            candidato for candidato in candidatos_celda if candidato
+        ]
+        if candidatos_celda:
+            return max(candidatos_celda, key=lambda texto: (len(texto.split()), len(texto)))
+
+        texto_celda = _extraer_texto_elemento_visible(celda_nombre)
+        if texto_celda:
+            return texto_celda
+
+    nombre = fila.select_one("td.firstname, td[data-field='firstname']")
+    apellidos = fila.select_one("td.lastname, td[data-field='lastname']")
+    partes = [
+        texto
+        for elemento in (nombre, apellidos)
+        if elemento is not None
+        and (texto := _extraer_texto_elemento_visible(elemento))
+    ]
+    if partes:
+        return " ".join(partes)
+
+    candidatos = [
+        _extraer_texto_visible(enlace)
+        for enlace in enlaces_usuario
+    ]
+    candidatos = [candidato for candidato in candidatos if candidato]
+    return (
+        max(candidatos, key=lambda texto: (len(texto.split()), len(texto)))
+        if candidatos
+        else ""
+    )
+
+
+def extraer_numero_intentos_cuestionario(html: str) -> int:
+    """Obtiene el contador de intentos mostrado en la portada del cuestionario."""
+    soup = BeautifulSoup(html, "html.parser")
+    contador = soup.select_one(".quizattemptcounts")
+    if contador is None:
+        # Moodle omite este bloque cuando todavía no hay ningún intento.
+        return 0
+
+    enlace_informe = contador.find(
+        "a",
+        href=lambda href: href
+        and "/mod/quiz/report.php" in href
+        and "mode=overview" in href,
+    )
+    texto = (enlace_informe or contador).get_text(" ", strip=True)
+    numero = _extraer_entero(texto)
+    return numero if numero is not None else 0
+
+
+def extraer_paginas_informe_cuestionario(
+    html: str,
+    url_pagina: str,
+) -> tuple[str, ...]:
+    """Extrae las páginas adicionales del informe de intentos."""
+    soup = BeautifulSoup(html, "html.parser")
+    paginas: dict[str, None] = {}
+    for enlace in soup.select(
+        ".paging a[href], .pagination a[href], [data-region='paging'] a[href]"
+    ):
+        url = urljoin(url_pagina, str(enlace["href"]))
+        partes = urlparse(url)
+        if (
+            "/mod/quiz/report.php" not in partes.path
+            or "page" not in parse_qs(partes.query)
+        ):
+            continue
+        paginas.setdefault(url, None)
+    return tuple(paginas)
+
+
+def extraer_entregas_tarea(
+    html: str,
+    url_pagina: str,
+    actividad_id: int,
+) -> tuple[EntregaTarea, ...]:
+    """Extrae alumnos y datos visibles de la pestaña Entregas."""
+    soup = BeautifulSoup(html, "html.parser")
+    tabla = soup.select_one("table#submissions")
+    if tabla is None:
+        return ()
+
+    entregas: dict[int, EntregaTarea] = {}
+    for fila in tabla.select("tbody tr"):
+        alumno_id = _extraer_usuario_id_fila_entrega(fila)
+        if alumno_id is None:
+            continue
+        enlaces_usuario = fila.find_all(
+            "a",
+            href=lambda href: href
+            and ("/user/view.php" in href or "/user/profile.php" in href),
+        )
+        alumno = _extraer_nombre_completo_alumno(fila, enlaces_usuario)
+        if not alumno:
+            identificador = fila.select_one(".recordid")
+            alumno = (
+                _extraer_texto_elemento_visible(identificador)
+                if identificador is not None
+                else f"Alumno {alumno_id}"
+            )
+
+        archivos = extraer_archivos_tarea(fila, url_pagina)
+        enlace_texto = fila.find(
+            "a",
+            href=lambda href: href
+            and "action=viewpluginassignsubmission" in href
+            and "plugin=onlinetext" in href,
+        )
+        url_texto = (
+            urljoin(url_pagina, str(enlace_texto["href"]))
+            if enlace_texto is not None
+            else None
+        )
+        celda_nota = fila.select_one("td.grade, td[data-field='grade']")
+        nota = (
+            _extraer_texto_elemento_visible(celda_nota)
+            if celda_nota is not None
+            else ""
+        )
+        tiene_nota = bool(nota and nota not in {"-", "Sin calificar"})
+        calificacion_avanzada = fila.select_one(
+            ".gradingform_rubric, .advancedgrading, [data-gradingmethod]"
+        ) is not None
+        url_calificacion = urljoin(
+            url_pagina,
+            "view.php?"
+            f"id={actividad_id}&action=grade&userid={alumno_id}",
+        )
+        entregas[alumno_id] = EntregaTarea(
+            alumno_id=alumno_id,
+            alumno=alumno,
+            html_resumen=str(fila),
+            url_calificacion=url_calificacion,
+            archivos=archivos,
+            url_texto_completo=url_texto,
+            requiere_calificacion=(
+                calificacion_avanzada or not (archivos and tiene_nota)
+            ),
+        )
+    return tuple(entregas.values())
+
+
+def extraer_paginas_entregas_tarea(
+    html: str,
+    url_pagina: str,
+) -> tuple[str, ...]:
+    """Extrae páginas adicionales de la tabla de entregas."""
+    soup = BeautifulSoup(html, "html.parser")
+    paginas: dict[str, None] = {}
+    for enlace in soup.select(
+        ".paging a[href], .pagination a[href], [data-region='paging'] a[href]"
+    ):
+        url = urljoin(url_pagina, str(enlace["href"]))
+        partes = urlparse(url)
+        parametros = parse_qs(partes.query)
+        if (
+            "/mod/assign/view.php" not in partes.path
+            or parametros.get("action", [""])[0] != "grading"
+            or "page" not in parametros
+        ):
+            continue
+        paginas.setdefault(url, None)
+    return tuple(paginas)
+
+
+def extraer_archivos_tarea(
+    html_o_elemento: str | Tag,
+    url_pagina: str,
+) -> tuple[AdjuntoRevision, ...]:
+    """Localiza ficheros de entrega y retroalimentación de una tarea."""
+    soup = (
+        BeautifulSoup(html_o_elemento, "html.parser")
+        if isinstance(html_o_elemento, str)
+        else html_o_elemento
+    )
+    archivos: dict[str, AdjuntoRevision] = {}
+    areas = (
+        "/assignsubmission_file/submission_files/",
+        "/assignsubmission_onlinetext/onlinetext/",
+        "/assignfeedback_file/feedback_files/",
+    )
+    for elemento in soup.select("[href], [src]"):
+        atributo = "href" if elemento.has_attr("href") else "src"
+        url = urljoin(url_pagina, str(elemento.get(atributo, "")))
+        partes = urlparse(url)
+        if "/pluginfile.php/" not in partes.path or not any(
+            area in partes.path for area in areas
+        ):
+            continue
+        nombre = unquote(partes.path.rstrip("/").rsplit("/", 1)[-1])
+        if nombre:
+            archivos.setdefault(url, AdjuntoRevision(url, nombre))
+    return tuple(archivos.values())
+
+
+def contiene_rubrica_tarea(html: str) -> bool:
+    """Detecta una rúbrica renderizada en la calificación individual."""
+    soup = BeautifulSoup(html, "html.parser")
+    return soup.select_one(
+        ".gradingform_rubric, .gradingform_rubric_editform, "
+        "[data-gradingmethod='rubric']"
+    ) is not None
+
+
+def _extraer_usuario_id_fila_entrega(fila: Tag) -> int | None:
+    for clase in fila.get("class", []):
+        coincidencia = re.fullmatch(r"user(\d+)", str(clase))
+        if coincidencia is not None:
+            return int(coincidencia.group(1))
+    for enlace in fila.find_all("a", href=True):
+        partes = urlparse(str(enlace["href"]))
+        if "/user/view.php" not in partes.path and "/user/profile.php" not in partes.path:
+            continue
+        valor = parse_qs(partes.query).get("id", [""])[0]
+        if valor.isdigit():
+            return int(valor)
+    seleccion = fila.select_one(
+        "input[name='selectedusers'][value], input[name='selectedusers[]'][value]"
+    )
+    valor = str(seleccion.get("value", "")) if seleccion is not None else ""
+    return int(valor) if valor.isdigit() else None
+
+
+def extraer_adjuntos_revision(
+    html: str,
+    url_pagina: str,
+) -> tuple[AdjuntoRevision, ...]:
+    """Localiza adjuntos de respuestas de ensayo en una revisión."""
+    soup = BeautifulSoup(html, "html.parser")
+    adjuntos: dict[str, AdjuntoRevision] = {}
+    for elemento in soup.select("[href], [src]"):
+        atributo = "href" if elemento.has_attr("href") else "src"
+        url = urljoin(url_pagina, str(elemento.get(atributo, "")))
+        partes = urlparse(url)
+        if (
+            "/pluginfile.php/" not in partes.path
+            or "/question/response_attachments/" not in partes.path
+        ):
+            continue
+        nombre = unquote(partes.path.rstrip("/").rsplit("/", 1)[-1])
+        if not nombre:
+            continue
+        adjuntos.setdefault(
+            url,
+            AdjuntoRevision(url=url, nombre=nombre),
+        )
+    return tuple(adjuntos.values())
+
+
 def extraer_cursos_ajax(datos: object, url_base: str) -> tuple[CursoMoodle, ...]:
     """Convierte la respuesta estructurada del servicio AJAX de Moodle."""
     if not isinstance(datos, dict) or not isinstance(datos.get("courses"), list):
@@ -310,6 +681,28 @@ def _extraer_nombre_curso(enlace: Tag) -> str:
         return " ".join(str(titulo["title"]).split())
 
     return " ".join(enlace.get_text(" ", strip=True).split())
+
+
+def _extraer_texto_visible(enlace: Tag) -> str:
+    """Obtiene el título del enlace omitiendo etiquetas accesibles auxiliares."""
+    fragmento = BeautifulSoup(str(enlace), "html.parser")
+    copia = fragmento.find("a")
+    if copia is None:
+        return ""
+    for oculto in copia.select(".accesshide, .sr-only, .visually-hidden"):
+        oculto.decompose()
+    return " ".join(copia.get_text(" ", strip=True).split())
+
+
+def _extraer_texto_elemento_visible(elemento: Tag) -> str:
+    """Obtiene el texto visible de una celda omitiendo ayudas accesibles."""
+    fragmento = BeautifulSoup(str(elemento), "html.parser")
+    copia = fragmento.find()
+    if copia is None:
+        return ""
+    for oculto in copia.select(".accesshide, .sr-only, .visually-hidden"):
+        oculto.decompose()
+    return " ".join(copia.get_text(" ", strip=True).split())
 
 
 def _extraer_imagen_curso(enlace: Tag, url_pagina: str) -> str | None:

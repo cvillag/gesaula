@@ -25,6 +25,47 @@ class AlumnoLevelUp:
 
 
 @dataclass(frozen=True)
+class ActividadDescargable:
+    """Actividad del curso que podrá almacenarse localmente."""
+
+    id: int
+    nombre: str
+    tipo: str
+    url: str
+
+
+@dataclass(frozen=True)
+class IntentoCuestionario:
+    """Intento de un alumno disponible para revisión."""
+
+    id: int
+    alumno_id: int | None
+    alumno: str
+    url_revision: str
+
+
+@dataclass(frozen=True)
+class AdjuntoRevision:
+    """Archivo adjunto enlazado desde la revisión de un cuestionario."""
+
+    url: str
+    nombre: str
+
+
+@dataclass(frozen=True)
+class EntregaTarea:
+    """Fila de un alumno encontrada en la pestaña Entregas."""
+
+    alumno_id: int
+    alumno: str
+    html_resumen: str
+    url_calificacion: str
+    archivos: tuple[AdjuntoRevision, ...]
+    url_texto_completo: str | None
+    requiere_calificacion: bool
+
+
+@dataclass(frozen=True)
 class FormularioLogin:
     """Datos necesarios para reproducir el formulario de acceso."""
 

@@ -11,9 +11,11 @@ from gesaula.moodle.errors import (
     SesionMoodleExpirada,
 )
 from gesaula.moodle.models import (
+    ActividadDescargable,
     AlumnoLevelUp,
     ComprobacionesLogin,
     CursoMoodle,
+    IntentoCuestionario,
     ResultadoLogin,
 )
 from gesaula.moodle.parsers import (
@@ -23,10 +25,15 @@ from gesaula.moodle.parsers import (
     contiene_formulario_login,
     contiene_identidad_usuario,
     esta_en_mantenimiento,
+    extraer_actividades_descargables,
     extraer_alumnos_level_up,
     extraer_cursos,
     extraer_cursos_ajax,
     extraer_formulario_login,
+    extraer_intentos_cuestionario,
+    extraer_numero_intentos_cuestionario,
+    extraer_paginas_entregas_tarea,
+    extraer_paginas_informe_cuestionario,
     extraer_sesskey,
     extraer_url_level_up,
     extraer_usuario_id,
@@ -136,6 +143,83 @@ class ClienteMoodle:
         """Obtiene nombre, nivel y puntos de los alumnos del informe."""
         respuesta = self.obtener(url_informe)
         return extraer_alumnos_level_up(respuesta.text)
+
+    def obtener_actividades_descargables(
+        self,
+        curso_id: int,
+    ) -> tuple[ActividadDescargable, ...]:
+        """Obtiene las actividades compatibles presentes en un curso."""
+        respuesta = self.obtener(f"course/view.php?id={curso_id}")
+        return extraer_actividades_descargables(
+            respuesta.text,
+            str(respuesta.url),
+        )
+
+    def obtener_intentos_cuestionario(
+        self,
+        actividad_id: int,
+    ) -> tuple[IntentoCuestionario, ...]:
+        """Obtiene los intentos revisables recorriendo todas las páginas."""
+        pendientes = [
+            "mod/quiz/report.php"
+            f"?id={actividad_id}&mode=overview&pagesize=5000"
+        ]
+        visitadas: set[str] = set()
+        intentos: dict[int, IntentoCuestionario] = {}
+        while pendientes:
+            url = pendientes.pop(0)
+            respuesta = self.obtener(url)
+            url_final = str(respuesta.url)
+            if url_final in visitadas:
+                continue
+            visitadas.add(url_final)
+            for intento in extraer_intentos_cuestionario(
+                respuesta.text,
+                url_final,
+            ):
+                intentos.setdefault(intento.id, intento)
+            for pagina in extraer_paginas_informe_cuestionario(
+                respuesta.text,
+                url_final,
+            ):
+                if pagina not in visitadas and pagina not in pendientes:
+                    pendientes.append(pagina)
+        return tuple(intentos.values())
+
+    def obtener_numero_intentos_cuestionario(
+        self,
+        actividad: ActividadDescargable,
+    ) -> int:
+        """Consulta el contador de intentos de la portada del cuestionario."""
+        respuesta = self.obtener(actividad.url)
+        return extraer_numero_intentos_cuestionario(respuesta.text)
+
+    def obtener_paginas_entregas_tarea(
+        self,
+        actividad_id: int,
+    ) -> tuple[tuple[str, str], ...]:
+        """Obtiene el HTML de todas las páginas de Entregas de una tarea."""
+        pendientes = [
+            "mod/assign/view.php?"
+            f"id={actividad_id}&action=grading&perpage=100"
+        ]
+        visitadas: set[str] = set()
+        paginas: list[tuple[str, str]] = []
+        while pendientes:
+            url = pendientes.pop(0)
+            respuesta = self.obtener(url)
+            url_final = str(respuesta.url)
+            if url_final in visitadas:
+                continue
+            visitadas.add(url_final)
+            paginas.append((respuesta.text, url_final))
+            for pagina in extraer_paginas_entregas_tarea(
+                respuesta.text,
+                url_final,
+            ):
+                if pagina not in visitadas and pagina not in pendientes:
+                    pendientes.append(pagina)
+        return tuple(paginas)
 
     def actualizar_px_level_up(
         self,

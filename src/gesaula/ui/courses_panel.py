@@ -35,7 +35,6 @@ class PanelCursos(QWidget):
         self._trabajos_activos: set[object] = set()
         self.cursos: dict[int, CursoMoodle] = {}
         self._elementos: dict[int, QListWidgetItem] = {}
-        self._estados_imagen: dict[int, str] = {}
 
         logotipo = QLabel()
         logotipo.setPixmap(QPixmap(str(DIRECTORIO_ICONOS / "logo32.png")))
@@ -78,7 +77,6 @@ class PanelCursos(QWidget):
         self.mosaico.clear()
         self.cursos = {curso.id: curso for curso in cursos}
         self._elementos.clear()
-        self._estados_imagen.clear()
 
         if not cursos:
             elemento = QListWidgetItem(
@@ -90,19 +88,14 @@ class PanelCursos(QWidget):
 
         icono_provisional = QIcon(self._crear_imagen_provisional())
         for curso in cursos:
-            origen = self._describir_origen_imagen(curso.imagen_url)
-            self._estados_imagen[curso.id] = f"Pendiente: {origen}"
             elemento = QListWidgetItem(
                 icono_provisional,
-                self._texto_tarjeta(curso.id),
+                curso.nombre,
             )
             elemento.setData(Qt.ItemDataRole.UserRole, curso.id)
             elemento.setData(Qt.ItemDataRole.UserRole + 1, curso.url)
             elemento.setTextAlignment(Qt.AlignmentFlag.AlignHCenter)
-            elemento.setToolTip(
-                f"{curso.nombre}\nID: {curso.id}\n"
-                f"Origen completo: {curso.imagen_url or 'sin imagen'}"
-            )
+            elemento.setToolTip(f"{curso.nombre}\nID: {curso.id}")
             self.mosaico.addItem(elemento)
             self._elementos[curso.id] = elemento
 
@@ -112,7 +105,6 @@ class PanelCursos(QWidget):
         """Carga las imágenes sin bloquear la interfaz."""
         trabajo = CargarImagenesCursos(cliente, cursos)
         trabajo.senales.imagen_cargada.connect(self.mostrar_imagen)
-        trabajo.senales.estado_imagen.connect(self.mostrar_estado_imagen)
         trabajo.senales.sesion_expirada.connect(self.sesion_expirada.emit)
         trabajo.senales.finalizada.connect(self._retirar_trabajo)
         self._trabajos_activos.add(trabajo)
@@ -129,10 +121,6 @@ class PanelCursos(QWidget):
         if elemento is None:
             return
         if not imagen.loadFromData(datos):
-            self.mostrar_estado_imagen(
-                curso_id,
-                f"ERROR: Qt no reconoce los {len(datos)} bytes recibidos",
-            )
             return
 
         ajustada = imagen.scaled(
@@ -146,33 +134,6 @@ class PanelCursos(QWidget):
         elemento.setIcon(
             QIcon(ajustada.copy(x, y, ANCHO_IMAGEN, ALTO_IMAGEN))
         )
-        self.mostrar_estado_imagen(
-            curso_id,
-            f"MOSTRADA: {len(datos)} bytes, {imagen.width()}x{imagen.height()} px",
-        )
-
-    def mostrar_estado_imagen(self, curso_id: int, estado: str) -> None:
-        """Hace visible en la tarjeta cada etapa de la carga para facilitar el debug."""
-        elemento = self._elementos.get(curso_id)
-        if elemento is None:
-            return
-        self._estados_imagen[curso_id] = estado
-        elemento.setText(self._texto_tarjeta(curso_id))
-
-    def _texto_tarjeta(self, curso_id: int) -> str:
-        curso = self.cursos[curso_id]
-        return f"{curso.nombre}\n{self._estados_imagen[curso_id]}"
-
-    @staticmethod
-    def _describir_origen_imagen(imagen_url: str | None) -> str:
-        """Resume los data URI enormes; las URL HTTP se muestran completas."""
-        if imagen_url is None:
-            return "sin ruta de imagen"
-        if imagen_url.startswith("data:"):
-            cabecera, separador, contenido = imagen_url.partition(",")
-            if separador:
-                return f"{cabecera},... ({len(contenido)} caracteres embebidos)"
-        return imagen_url
 
     def _emitir_curso_seleccionado(self, elemento: QListWidgetItem) -> None:
         curso_id = elemento.data(Qt.ItemDataRole.UserRole)

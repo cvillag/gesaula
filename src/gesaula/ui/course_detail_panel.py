@@ -28,6 +28,7 @@ class AccionCurso:
     nombre: str
     url: str
     icono: QIcon
+    tamano_icono: QSize = TAMANO_ICONO_ACCION
 
 
 class PanelDetalleCurso(QWidget):
@@ -93,7 +94,7 @@ class PanelDetalleCurso(QWidget):
             boton = QPushButton()
             boton.setFixedSize(TAMANO_BOTON_ACCION)
             boton.setIcon(accion.icono)
-            boton.setIconSize(TAMANO_ICONO_ACCION)
+            boton.setIconSize(accion.tamano_icono)
             boton.setToolTip(accion.nombre)
             boton.setAccessibleName(accion.nombre)
             boton.setStyleSheet(
@@ -133,4 +134,15 @@ def crear_accion_level_up(url: str) -> AccionCurso:
         nombre="Level up / Sube de nivel",
         url=url,
         icono=QIcon(str(DIRECTORIO_ICONOS / "logo-inverse.svg")),
+    )
+
+
+def crear_accion_guardar_examenes(url: str) -> AccionCurso:
+    """Crea la acción para seleccionar actividades que se almacenarán."""
+    return AccionCurso(
+        identificador="guardar_examenes",
+        nombre="Almacenar exámenes digitales",
+        url=url,
+        icono=QIcon(str(DIRECTORIO_ICONOS / "GuardarExamenes2.png")),
+        tamano_icono=QSize(180, 60),
     )

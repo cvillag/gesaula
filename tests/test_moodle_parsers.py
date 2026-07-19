@@ -1,9 +1,17 @@
 """Pruebas de parsers de Moodle."""
 
 from gesaula.moodle.parsers import (
+    contiene_rubrica_tarea,
+    extraer_actividades_descargables,
+    extraer_adjuntos_revision,
     extraer_alumnos_level_up,
     extraer_cursos,
     extraer_cursos_ajax,
+    extraer_entregas_tarea,
+    extraer_intentos_cuestionario,
+    extraer_numero_intentos_cuestionario,
+    extraer_paginas_entregas_tarea,
+    extraer_paginas_informe_cuestionario,
     extraer_sesskey,
     extraer_url_level_up,
     extraer_usuario_id,
@@ -263,3 +271,244 @@ def test_no_confunde_otra_tabla_con_el_informe_level_up() -> None:
     """
 
     assert extraer_alumnos_level_up(html) == ()
+
+
+def test_extrae_actividades_descargables_unicas_del_curso() -> None:
+    html = """
+    <nav>
+      <a class="courseindex-link" href="/mod/quiz/view.php?id=10">
+        Control de la unidad 1
+      </a>
+    </nav>
+    <main>
+      <a href="/mod/quiz/view.php?id=10">
+        <span class="instancename">Control de la unidad 1
+          <span class="accesshide">Cuestionario</span>
+        </span>
+      </a>
+      <a href="/mod/workshop/view.php?id=11">Taller de repaso</a>
+      <a href="/mod/data/view.php?id=12">Base de datos del proyecto</a>
+      <a href="/mod/geogebra/view.php?id=13">Construcción geométrica</a>
+      <a href="/mod/glossary/view.php?id=14">Glosario de conceptos</a>
+      <a href="/mod/assign/view.php?id=15">Entrega final</a>
+      <a href="/mod/forum/view.php?id=16">Foro no descargable</a>
+    </main>
+    """
+
+    actividades = extraer_actividades_descargables(
+        html,
+        "https://aula.test/course/view.php?id=1203",
+    )
+
+    assert [actividad.id for actividad in actividades] == [10, 11, 12, 13, 14, 15]
+    assert [actividad.tipo for actividad in actividades] == [
+        "Cuestionario",
+        "Taller",
+        "Base de datos",
+        "GeoGebra",
+        "Glosario",
+        "Tarea",
+    ]
+    assert actividades[0].nombre == "Control de la unidad 1"
+    assert actividades[0].url == "https://aula.test/mod/quiz/view.php?id=10"
+
+
+def test_extrae_intentos_y_alumnos_del_informe_del_cuestionario() -> None:
+    html = """
+    <table id="attempts">
+      <tbody>
+        <tr>
+          <td class="fullname">
+            <a href="/user/view.php?id=42&amp;course=1203">Ana Ejemplo</a>
+          </td>
+          <td><a href="/mod/quiz/review.php?attempt=52049">Revisar</a></td>
+          <td><a href="/mod/quiz/review.php?attempt=52049">Nota</a></td>
+        </tr>
+        <tr>
+          <td class="fullname">
+            <a href="/user/view.php?id=43&amp;course=1203">Luis Prueba</a>
+          </td>
+          <td><a href="/mod/quiz/review.php?attempt=52050">Revisar</a></td>
+        </tr>
+      </tbody>
+    </table>
+    """
+
+    intentos = extraer_intentos_cuestionario(
+        html,
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview",
+    )
+
+    assert [intento.id for intento in intentos] == [52049, 52050]
+    assert [intento.alumno_id for intento in intentos] == [42, 43]
+    assert [intento.alumno for intento in intentos] == [
+        "Ana Ejemplo",
+        "Luis Prueba",
+    ]
+    assert intentos[0].url_revision == (
+        "https://aula.test/mod/quiz/review.php?attempt=52049"
+    )
+
+
+def test_prioriza_nombre_completo_sobre_enlace_abreviado() -> None:
+    html = """
+    <table><tr>
+      <td class="fullname">
+        <a href="/user/view.php?id=42">Ana</a>
+        <a href="/user/view.php?id=42">Ana García López</a>
+      </td>
+      <td><a href="/mod/quiz/review.php?attempt=100">Revisar</a></td>
+    </tr></table>
+    """
+
+    intentos = extraer_intentos_cuestionario(
+        html,
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview",
+    )
+
+    assert intentos[0].alumno == "Ana García López"
+
+
+def test_compone_nombre_y_apellidos_separados_por_moodle() -> None:
+    html = """
+    <table><tr>
+      <td><a href="/user/view.php?id=42"><img alt="Perfil"></a></td>
+      <td data-field="firstname">Ana María</td>
+      <td data-field="lastname">García López</td>
+      <td><a href="/mod/quiz/review.php?attempt=100">Revisar</a></td>
+    </tr></table>
+    """
+
+    intentos = extraer_intentos_cuestionario(
+        html,
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview",
+    )
+
+    assert intentos[0].alumno == "Ana María García López"
+
+
+def test_extrae_numero_intentos_de_la_portada_del_cuestionario() -> None:
+    html = """
+    <div class="box py-3 quizinfo">
+      <p>Intentos permitidos: 1</p>
+    </div>
+    <div class="quizattemptcounts">
+      <a href="/mod/quiz/report.php?id=82001&amp;mode=overview">
+        Intentos: 2
+      </a>
+    </div>
+    """
+
+    assert extraer_numero_intentos_cuestionario(html) == 2
+    assert extraer_numero_intentos_cuestionario("<main>Sin intentos</main>") == 0
+
+
+def test_extrae_paginas_adicionales_del_informe() -> None:
+    html = """
+    <nav class="pagination">
+      <a href="/mod/quiz/report.php?id=10&amp;mode=overview&amp;page=0">1</a>
+      <a href="/mod/quiz/report.php?id=10&amp;mode=overview&amp;page=1">2</a>
+      <a href="/course/view.php?id=1203">Curso</a>
+    </nav>
+    """
+
+    paginas = extraer_paginas_informe_cuestionario(
+        html,
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview",
+    )
+
+    assert paginas == (
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview&page=0",
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview&page=1",
+    )
+
+
+def test_extrae_solo_adjuntos_de_respuestas_de_ensayo() -> None:
+    html = """
+    <div class="attachments">
+      <a href="/pluginfile.php/100/question/response_attachments/200/1/informe.pdf?forcedownload=1">
+        informe.pdf
+      </a>
+      <img src="/pluginfile.php/100/question/response_attachments/200/1/imagen.png">
+      <a href="/pluginfile.php/100/question/response_answer/200/1/inline.png">
+        Otro archivo
+      </a>
+    </div>
+    """
+
+    adjuntos = extraer_adjuntos_revision(
+        html,
+        "https://aula.test/mod/quiz/review.php?attempt=52049",
+    )
+
+    assert [adjunto.nombre for adjunto in adjuntos] == [
+        "informe.pdf",
+        "imagen.png",
+    ]
+    assert adjuntos[0].url.endswith(
+        "/question/response_attachments/200/1/informe.pdf?forcedownload=1"
+    )
+
+
+def test_extrae_entregas_con_y_sin_contenido() -> None:
+    html = """
+    <table id="submissions"><tbody>
+      <tr class="user42">
+        <td class="fullname"><a href="/user/view.php?id=42">Ana García</a></td>
+        <td>
+          <a href="/pluginfile.php/1/assignsubmission_file/submission_files/7/tarea.pdf">
+            tarea.pdf
+          </a>
+        </td>
+        <td class="grade">8,50</td>
+      </tr>
+      <tr class="user43">
+        <td class="fullname"><a href="/user/view.php?id=43">Luis Pérez</a></td>
+        <td>
+          <a
+            href="/mod/assign/view.php?id=15&amp;action=viewpluginassignsubmission&amp;plugin=onlinetext"
+          >
+            Ver texto completo
+          </a>
+        </td>
+        <td class="grade">-</td>
+      </tr>
+    </tbody></table>
+    """
+
+    entregas = extraer_entregas_tarea(
+        html,
+        "https://aula.test/mod/assign/view.php?id=15&action=grading",
+        15,
+    )
+
+    assert [entrega.alumno for entrega in entregas] == [
+        "Ana García",
+        "Luis Pérez",
+    ]
+    assert entregas[0].archivos[0].nombre == "tarea.pdf"
+    assert entregas[0].requiere_calificacion is False
+    assert entregas[1].requiere_calificacion is True
+    assert entregas[1].url_texto_completo is not None
+    assert entregas[1].url_calificacion.endswith(
+        "view.php?id=15&action=grade&userid=43"
+    )
+
+
+def test_extrae_paginacion_de_entregas_y_detecta_rubrica() -> None:
+    html = """
+    <nav class="pagination">
+      <a href="/mod/assign/view.php?id=15&amp;action=grading&amp;page=1">2</a>
+      <a href="/course/view.php?id=1&amp;page=1">Otro</a>
+    </nav>
+    """
+
+    assert extraer_paginas_entregas_tarea(
+        html,
+        "https://aula.test/mod/assign/view.php?id=15&action=grading",
+    ) == (
+        "https://aula.test/mod/assign/view.php?id=15&action=grading&page=1",
+    )
+    assert contiene_rubrica_tarea(
+        '<div class="gradingform_rubric">Criterios</div>'
+    )

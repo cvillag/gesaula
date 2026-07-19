@@ -17,17 +17,24 @@ from gesaula.actions.calificaciones_ods import (
     InformeCalificaciones,
     SeleccionCalificaciones,
 )
-from gesaula.moodle.models import ResultadoLogin
-from gesaula.ui.course_detail_panel import PanelDetalleCurso, crear_accion_level_up
+from gesaula.moodle.models import ActividadDescargable, ResultadoLogin
+from gesaula.ui.course_detail_panel import (
+    PanelDetalleCurso,
+    crear_accion_guardar_examenes,
+    crear_accion_level_up,
+)
 from gesaula.ui.courses_panel import PanelCursos
+from gesaula.ui.exam_storage_panel import PanelAlmacenarExamenes
 from gesaula.ui.grades_dialog import DialogoCalificaciones
 from gesaula.ui.level_up_panel import PanelLevelUp
 from gesaula.ui.login_panel import PanelConexion, PanelCredenciales
 from gesaula.ui.workers import (
     ActualizarPxLevelUp,
     AplicarCalificacionesLevelUp,
+    CargarActividadesCurso,
     CargarInformeLevelUp,
     ComprobarRolProfesor,
+    GuardarCuestionarios,
 )
 
 
@@ -55,11 +62,13 @@ class VentanaPrincipal(QMainWindow):
         self.panel_cursos = PanelCursos(self.paginas)
         self.panel_detalle_curso = PanelDetalleCurso(self.paginas)
         self.panel_level_up = PanelLevelUp(self.paginas)
+        self.panel_almacenar_examenes = PanelAlmacenarExamenes(self.paginas)
         self.paginas.addWidget(self.panel_conexion)
         self.paginas.addWidget(self.panel_credenciales)
         self.paginas.addWidget(self.panel_cursos)
         self.paginas.addWidget(self.panel_detalle_curso)
         self.paginas.addWidget(self.panel_level_up)
+        self.paginas.addWidget(self.panel_almacenar_examenes)
         self.panel_conexion.url_comprobada.connect(self.mostrar_credenciales)
         self.panel_credenciales.sesion_iniciada.connect(self.conservar_sesion)
         self.panel_credenciales.sesion_expirada.connect(
@@ -73,6 +82,12 @@ class VentanaPrincipal(QMainWindow):
         self.panel_level_up.sumar_px_solicitado.connect(self.sumar_px_level_up)
         self.panel_level_up.calificaciones_solicitadas.connect(
             self.aplicar_calificaciones_level_up
+        )
+        self.panel_almacenar_examenes.volver_solicitado.connect(
+            self.mostrar_detalle_curso
+        )
+        self.panel_almacenar_examenes.descarga_solicitada.connect(
+            self.guardar_cuestionarios
         )
 
         self.barra_sesion = QWidget(marco)
@@ -155,11 +170,10 @@ class VentanaPrincipal(QMainWindow):
         curso = self.panel_cursos.cursos.get(curso_id)
         if curso is None:
             return
-        acciones = (
-            (crear_accion_level_up(url_level_up),)
-            if isinstance(url_level_up, str)
-            else ()
-        )
+        acciones = []
+        if isinstance(url_level_up, str):
+            acciones.append(crear_accion_level_up(url_level_up))
+        acciones.append(crear_accion_guardar_examenes(curso.url))
         self.panel_detalle_curso.mostrar(curso, acciones)
         self.paginas.setCurrentWidget(self.panel_detalle_curso)
 
@@ -183,21 +197,121 @@ class VentanaPrincipal(QMainWindow):
     def mostrar_accion(self, identificador: str, url: str) -> None:
         """Abre la pantalla de una acción disponible para el curso."""
         curso = self.panel_detalle_curso.curso
+        if curso is None or self.cliente_moodle is None:
+            return
+
+        if identificador == "level_up":
+            self.panel_level_up.mostrar_cargando(curso, url)
+            self.paginas.setCurrentWidget(self.panel_level_up)
+            self.resize(max(self.width(), 1050), max(self.height(), 800))
+
+            trabajo = CargarInformeLevelUp(self.cliente_moodle, curso.id, url)
+            trabajo.senales.completada.connect(self.procesar_informe_level_up)
+            trabajo.senales.fallido.connect(self.panel_level_up.mostrar_error)
+            trabajo.senales.mantenimiento.connect(self.panel_level_up.mostrar_error)
+            trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
+            trabajo.senales.finalizada.connect(self._retirar_trabajo)
+            self._trabajos_activos.add(trabajo)
+            QThreadPool.globalInstance().start(trabajo)
+            return
+
+        if identificador != "guardar_examenes":
+            return
+        self.panel_almacenar_examenes.mostrar_cargando(curso)
+        self.paginas.setCurrentWidget(self.panel_almacenar_examenes)
+        self.resize(max(self.width(), 900), max(self.height(), 750))
+
+        trabajo = CargarActividadesCurso(self.cliente_moodle, curso.id)
+        trabajo.senales.completada.connect(self.procesar_actividades_curso)
+        trabajo.senales.fallido.connect(
+            self.panel_almacenar_examenes.mostrar_error
+        )
+        trabajo.senales.mantenimiento.connect(
+            self.panel_almacenar_examenes.mostrar_error
+        )
+        trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
+        trabajo.senales.finalizada.connect(self._retirar_trabajo)
+        self._trabajos_activos.add(trabajo)
+        QThreadPool.globalInstance().start(trabajo)
+
+    def procesar_actividades_curso(
+        self,
+        curso_id: int,
+        actividades: object,
+    ) -> None:
+        """Muestra las actividades si corresponden al curso abierto."""
+        curso = self.panel_almacenar_examenes.curso
+        if curso is None or curso.id != curso_id or not isinstance(actividades, tuple):
+            return
+        self.panel_almacenar_examenes.mostrar_actividades(actividades)
+
+    def guardar_cuestionarios(
+        self,
+        actividades: object,
+        destino: str,
+    ) -> None:
+        """Inicia el inventario y archivado de los cuestionarios seleccionados."""
         if (
-            identificador != "level_up"
-            or curso is None
+            not isinstance(actividades, tuple)
+            or not actividades
             or self.cliente_moodle is None
         ):
             return
-
-        self.panel_level_up.mostrar_cargando(curso, url)
-        self.paginas.setCurrentWidget(self.panel_level_up)
-        self.resize(max(self.width(), 1050), max(self.height(), 800))
-
-        trabajo = CargarInformeLevelUp(self.cliente_moodle, curso.id, url)
-        trabajo.senales.completada.connect(self.procesar_informe_level_up)
-        trabajo.senales.fallido.connect(self.panel_level_up.mostrar_error)
-        trabajo.senales.mantenimiento.connect(self.panel_level_up.mostrar_error)
+        actividades_almacenables = tuple(
+            actividad
+            for actividad in actividades
+            if isinstance(actividad, ActividadDescargable)
+            and actividad.tipo in {"Cuestionario", "Tarea"}
+        )
+        if not actividades_almacenables:
+            return
+        self.panel_almacenar_examenes.iniciar_analisis(
+            len(actividades_almacenables)
+        )
+        trabajo = GuardarCuestionarios(
+            self.cliente_moodle,
+            actividades_almacenables,
+            destino,
+        )
+        trabajo.senales.analisis_elemento_iniciado.connect(
+            self.panel_almacenar_examenes.iniciar_analisis_elemento
+        )
+        trabajo.senales.analisis_progreso.connect(
+            self.panel_almacenar_examenes.actualizar_analisis
+        )
+        trabajo.senales.analisis_elemento_completado.connect(
+            self.panel_almacenar_examenes.completar_analisis_elemento
+        )
+        trabajo.senales.analisis_tarea_iniciada.connect(
+            self.panel_almacenar_examenes.iniciar_analisis_tarea
+        )
+        trabajo.senales.analisis_tarea_completada.connect(
+            self.panel_almacenar_examenes.completar_analisis_tarea
+        )
+        trabajo.senales.inventario.connect(
+            self.panel_almacenar_examenes.mostrar_inventario
+        )
+        trabajo.senales.elemento_iniciado.connect(
+            self.panel_almacenar_examenes.iniciar_elemento
+        )
+        trabajo.senales.intento_guardado.connect(
+            self.panel_almacenar_examenes.actualizar_intento
+        )
+        trabajo.senales.tarea_iniciada.connect(
+            self.panel_almacenar_examenes.iniciar_tarea
+        )
+        trabajo.senales.entrega_guardada.connect(
+            self.panel_almacenar_examenes.actualizar_entrega
+        )
+        trabajo.senales.elemento_completado.connect(
+            self.panel_almacenar_examenes.completar_elemento
+        )
+        trabajo.senales.completada.connect(
+            self.panel_almacenar_examenes.completar_descarga
+        )
+        trabajo.senales.descarga_fallida.connect(
+            self.panel_almacenar_examenes.fallar_descarga
+        )
         trabajo.senales.sesion_expirada.connect(self.mostrar_sesion_expirada)
         trabajo.senales.finalizada.connect(self._retirar_trabajo)
         self._trabajos_activos.add(trabajo)
@@ -364,6 +478,7 @@ class VentanaPrincipal(QMainWindow):
         self.barra_sesion.hide()
         self.panel_detalle_curso.limpiar()
         self.panel_level_up.limpiar()
+        self.panel_almacenar_examenes.limpiar()
         self.paginas.setCurrentWidget(self.panel_credenciales)
         self.panel_credenciales.mostrar_error(mensaje)
         self.panel_credenciales.entrada_contrasena.setFocus()
@@ -379,6 +494,7 @@ class VentanaPrincipal(QMainWindow):
         self.panel_cursos.mostrar(())
         self.panel_detalle_curso.limpiar()
         self.panel_level_up.limpiar()
+        self.panel_almacenar_examenes.limpiar()
         self.paginas.setCurrentWidget(self.panel_conexion)
         self.panel_conexion.entrada_url.setFocus()
 

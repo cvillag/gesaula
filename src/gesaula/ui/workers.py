@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+from pathlib import Path
 from urllib.parse import unquote_to_bytes
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot
@@ -12,6 +13,17 @@ from gesaula.actions.calificaciones_ods import (
     SeleccionCalificaciones,
     preparar_plan_calificaciones,
 )
+from gesaula.actions.guardar_cuestionarios import (
+    CuestionarioConIntentos,
+    crear_inventario_cuestionarios,
+    guardar_revision_cuestionario,
+    preparar_carpetas_cuestionario,
+)
+from gesaula.actions.guardar_tareas import (
+    TareaConEntregas,
+    guardar_entrega_tarea,
+    preparar_carpetas_tarea,
+)
 from gesaula.moodle.client import ClienteMoodle
 from gesaula.moodle.errors import (
     ErrorConexionMoodle,
@@ -19,7 +31,13 @@ from gesaula.moodle.errors import (
     SesionMoodleExpirada,
 )
 from gesaula.moodle.http_client import comprobar_url
-from gesaula.moodle.models import CursoMoodle
+from gesaula.moodle.models import ActividadDescargable, CursoMoodle
+from gesaula.moodle.parsers import (
+    contiene_rubrica_tarea,
+    extraer_adjuntos_revision,
+    extraer_archivos_tarea,
+    extraer_entregas_tarea,
+)
 
 
 class SenalesComprobacionUrl(QObject):
@@ -251,6 +269,346 @@ class CargarInformeLevelUp(QRunnable):
             self.senales.completada.emit(self.curso_id, alumnos)
         finally:
             self.senales.finalizada.emit(self)
+
+
+class SenalesActividadesCurso(SenalesOperacionMoodle):
+    """Comunica las actividades descargables encontradas en el curso."""
+
+    completada = Signal(int, object)
+
+
+class CargarActividadesCurso(QRunnable):
+    """Busca actividades compatibles sin bloquear la interfaz."""
+
+    def __init__(self, cliente: ClienteMoodle, curso_id: int) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self.cliente = cliente
+        self.curso_id = curso_id
+        self.senales = SenalesActividadesCurso()
+
+    @Slot()
+    def run(self) -> None:
+        """Obtiene las actividades o comunica el error de sesión."""
+        try:
+            actividades = self.cliente.obtener_actividades_descargables(
+                self.curso_id
+            )
+        except ErrorConexionMoodle as error:
+            emitir_error_moodle(self.senales, error)
+        else:
+            self.senales.completada.emit(self.curso_id, actividades)
+        finally:
+            self.senales.finalizada.emit(self)
+
+
+class SenalesGuardarCuestionarios(SenalesOperacionMoodle):
+    """Comunica el inventario y la descarga de revisiones."""
+
+    analisis_elemento_iniciado = Signal(int, int, str, int)
+    analisis_progreso = Signal(int, int, str)
+    analisis_elemento_completado = Signal(int, int, str, int, int)
+    analisis_tarea_iniciada = Signal(int, int, str)
+    analisis_tarea_completada = Signal(int, int, str, int)
+    inventario = Signal(int, int, int)
+    elemento_iniciado = Signal(int, int, str, int)
+    intento_guardado = Signal(int, int, str)
+    tarea_iniciada = Signal(int, int, str, int)
+    entrega_guardada = Signal(int, int, str)
+    elemento_completado = Signal(int, int)
+    completada = Signal(str, int, int)
+    descarga_fallida = Signal(str)
+
+
+class GuardarCuestionarios(QRunnable):
+    """Archiva revisiones y adjuntos de cuestionarios secuencialmente."""
+
+    def __init__(
+        self,
+        cliente: ClienteMoodle,
+        actividades: tuple[ActividadDescargable, ...],
+        destino: str | Path,
+    ) -> None:
+        super().__init__()
+        self.setAutoDelete(False)
+        self.cliente = cliente
+        self.actividades = actividades
+        self.destino = Path(destino)
+        self.senales = SenalesGuardarCuestionarios()
+
+    @Slot()
+    def run(self) -> None:
+        """Calcula primero el inventario y después descarga cada intento."""
+        try:
+            self.destino.mkdir(parents=True, exist_ok=True)
+            cuestionarios: dict[int, CuestionarioConIntentos] = {}
+            tareas: dict[int, TareaConEntregas] = {}
+            total_elementos = len(self.actividades)
+            for posicion, actividad in enumerate(self.actividades, start=1):
+                if actividad.tipo == "Tarea":
+                    self.senales.analisis_tarea_iniciada.emit(
+                        posicion,
+                        total_elementos,
+                        actividad.nombre,
+                    )
+                    entregas_por_alumno = {}
+                    for html, url_pagina in (
+                        self.cliente.obtener_paginas_entregas_tarea(
+                            actividad.id
+                        )
+                    ):
+                        for entrega in extraer_entregas_tarea(
+                            html,
+                            url_pagina,
+                            actividad.id,
+                        ):
+                            entregas_por_alumno.setdefault(
+                                entrega.alumno_id,
+                                entrega,
+                            )
+                    entregas = tuple(entregas_por_alumno.values())
+                    preparar_carpetas_tarea(
+                        self.destino,
+                        actividad,
+                        entregas,
+                    )
+                    tareas[actividad.id] = TareaConEntregas(
+                        actividad,
+                        entregas,
+                    )
+                    self.senales.analisis_progreso.emit(
+                        posicion,
+                        total_elementos,
+                        actividad.nombre,
+                    )
+                    self.senales.analisis_tarea_completada.emit(
+                        posicion,
+                        total_elementos,
+                        actividad.nombre,
+                        len(entregas),
+                    )
+                    continue
+
+                numero_intentos = (
+                    self.cliente.obtener_numero_intentos_cuestionario(
+                        actividad
+                    )
+                )
+                self.senales.analisis_elemento_iniciado.emit(
+                    posicion,
+                    total_elementos,
+                    actividad.nombre,
+                    numero_intentos,
+                )
+                intentos = (
+                    self.cliente.obtener_intentos_cuestionario(actividad.id)
+                    if numero_intentos > 0
+                    else ()
+                )
+                preparar_carpetas_cuestionario(
+                    self.destino,
+                    actividad,
+                    intentos,
+                )
+                cuestionarios[actividad.id] = CuestionarioConIntentos(
+                    actividad=actividad,
+                    intentos=intentos,
+                )
+                self.senales.analisis_progreso.emit(
+                    posicion,
+                    total_elementos,
+                    actividad.nombre,
+                )
+                self.senales.analisis_elemento_completado.emit(
+                    posicion,
+                    total_elementos,
+                    actividad.nombre,
+                    numero_intentos,
+                    len(intentos),
+                )
+
+            inventario = crear_inventario_cuestionarios(
+                tuple(cuestionarios.values())
+            )
+            alumnos = {
+                *_ids_alumnos_cuestionarios(tuple(cuestionarios.values())),
+                *(
+                    f"user:{entrega.alumno_id}"
+                    for tarea in tareas.values()
+                    for entrega in tarea.entregas
+                ),
+            }
+            total_registros = inventario.total_intentos + sum(
+                len(tarea.entregas) for tarea in tareas.values()
+            )
+            self.senales.inventario.emit(
+                total_elementos,
+                len(alumnos),
+                total_registros,
+            )
+
+            for numero_elemento, actividad in enumerate(
+                self.actividades,
+                start=1,
+            ):
+                if actividad.tipo == "Tarea":
+                    tarea = tareas[actividad.id]
+                    self._guardar_tarea(
+                        tarea,
+                        numero_elemento,
+                        total_elementos,
+                    )
+                    continue
+
+                cuestionario = cuestionarios[actividad.id]
+                total_intentos = len(cuestionario.intentos)
+                self.senales.elemento_iniciado.emit(
+                    numero_elemento,
+                    total_elementos,
+                    cuestionario.actividad.nombre,
+                    total_intentos,
+                )
+                for numero_intento, intento in enumerate(
+                    cuestionario.intentos,
+                    start=1,
+                ):
+                    respuesta = self.cliente.obtener(intento.url_revision)
+                    adjuntos = extraer_adjuntos_revision(
+                        respuesta.text,
+                        str(respuesta.url),
+                    )
+                    contenidos = tuple(
+                        (adjunto, self.cliente.obtener(adjunto.url).content)
+                        for adjunto in adjuntos
+                    )
+                    guardar_revision_cuestionario(
+                        self.destino,
+                        cuestionario.actividad,
+                        intento,
+                        respuesta.text,
+                        contenidos,
+                    )
+                    self.senales.intento_guardado.emit(
+                        numero_intento,
+                        total_intentos,
+                        intento.alumno,
+                    )
+                self.senales.elemento_completado.emit(
+                    numero_elemento,
+                    total_elementos,
+                )
+            self.senales.completada.emit(
+                str(self.destino),
+                total_elementos,
+                total_registros,
+            )
+        except SesionMoodleExpirada as error:
+            self.senales.sesion_expirada.emit(str(error))
+        except (ErrorConexionMoodle, OSError) as error:
+            self.senales.descarga_fallida.emit(str(error))
+        finally:
+            self.senales.finalizada.emit(self)
+
+    def _guardar_tarea(
+        self,
+        tarea: TareaConEntregas,
+        numero_elemento: int,
+        total_elementos: int,
+    ) -> None:
+        """Archiva todas las filas de Entregas y sus detalles opcionales."""
+        total_entregas = len(tarea.entregas)
+        self.senales.tarea_iniciada.emit(
+            numero_elemento,
+            total_elementos,
+            tarea.actividad.nombre,
+            total_entregas,
+        )
+        detalles: dict[int, tuple[str, str]] = {}
+        usa_rubrica = False
+        entrega_incompleta = next(
+            (
+                entrega
+                for entrega in tarea.entregas
+                if entrega.requiere_calificacion
+            ),
+            None,
+        )
+        if entrega_incompleta is not None:
+            respuesta = self.cliente.obtener(
+                entrega_incompleta.url_calificacion
+            )
+            detalle = (respuesta.text, str(respuesta.url))
+            detalles[entrega_incompleta.alumno_id] = detalle
+            usa_rubrica = contiene_rubrica_tarea(respuesta.text)
+
+        for numero_entrega, entrega in enumerate(tarea.entregas, start=1):
+            html_texto = None
+            html_calificacion = None
+            archivos = {archivo.url: archivo for archivo in entrega.archivos}
+
+            if entrega.url_texto_completo is not None:
+                respuesta = self.cliente.obtener(entrega.url_texto_completo)
+                html_texto = (respuesta.text, str(respuesta.url))
+                archivos.update(
+                    (archivo.url, archivo)
+                    for archivo in extraer_archivos_tarea(
+                        respuesta.text,
+                        str(respuesta.url),
+                    )
+                )
+            if entrega.requiere_calificacion or usa_rubrica:
+                html_calificacion = detalles.get(entrega.alumno_id)
+                if html_calificacion is None:
+                    respuesta = self.cliente.obtener(
+                        entrega.url_calificacion
+                    )
+                    html_calificacion = (
+                        respuesta.text,
+                        str(respuesta.url),
+                    )
+                archivos.update(
+                    (archivo.url, archivo)
+                    for archivo in extraer_archivos_tarea(
+                        html_calificacion[0],
+                        html_calificacion[1],
+                    )
+                )
+
+            contenidos = tuple(
+                (archivo, self.cliente.obtener(archivo.url).content)
+                for archivo in archivos.values()
+            )
+            guardar_entrega_tarea(
+                self.destino,
+                tarea.actividad,
+                entrega,
+                html_texto,
+                html_calificacion,
+                contenidos,
+            )
+            self.senales.entrega_guardada.emit(
+                numero_entrega,
+                total_entregas,
+                entrega.alumno,
+            )
+        self.senales.elemento_completado.emit(
+            numero_elemento,
+            total_elementos,
+        )
+
+
+def _ids_alumnos_cuestionarios(
+    cuestionarios: tuple[CuestionarioConIntentos, ...],
+) -> set[str]:
+    return {
+        (
+            f"user:{intento.alumno_id}"
+            if intento.alumno_id is not None
+            else f"nombre:{intento.alumno.casefold()}"
+        )
+        for cuestionario in cuestionarios
+        for intento in cuestionario.intentos
+    }
 
 
 class SenalesActualizarPxLevelUp(SenalesOperacionMoodle):

@@ -1,5 +1,6 @@
 """Pruebas del cliente Moodle."""
 
+from types import SimpleNamespace
 from urllib.parse import parse_qs
 
 from gesaula.moodle.client import ClienteMoodle
@@ -48,4 +49,78 @@ def test_actualiza_px_sin_cargar_el_formulario_dinamico() -> None:
         "_qf__block_xp_form_user_xp": ["1"],
         "xp": ["80"],
     }
+    cliente.cerrar()
+
+
+def test_obtiene_intentos_de_todas_las_paginas_del_informe() -> None:
+    cliente = ClienteMoodle("https://aula.test/")
+    paginas = {
+        "mod/quiz/report.php?id=10&mode=overview&pagesize=5000": SimpleNamespace(
+            url="https://aula.test/mod/quiz/report.php?id=10&mode=overview",
+            text="""
+              <table><tr>
+                <td class="fullname"><a href="/user/view.php?id=42">Ana</a></td>
+                <td><a href="/mod/quiz/review.php?attempt=100">Revisar</a></td>
+              </tr></table>
+              <nav class="pagination">
+                <a href="/mod/quiz/report.php?id=10&amp;mode=overview&amp;page=1">2</a>
+              </nav>
+            """,
+        ),
+        "https://aula.test/mod/quiz/report.php?id=10&mode=overview&page=1": (
+            SimpleNamespace(
+                url=(
+                    "https://aula.test/mod/quiz/report.php"
+                    "?id=10&mode=overview&page=1"
+                ),
+                text="""
+                  <table><tr>
+                    <td class="fullname">
+                      <a href="/user/view.php?id=43">Luis</a>
+                    </td>
+                    <td>
+                      <a href="/mod/quiz/review.php?attempt=101">Revisar</a>
+                    </td>
+                  </tr></table>
+                """,
+            )
+        ),
+    }
+    cliente.obtener = lambda url: paginas[url]  # type: ignore[method-assign]
+
+    intentos = cliente.obtener_intentos_cuestionario(10)
+
+    assert [intento.id for intento in intentos] == [100, 101]
+    assert [intento.alumno for intento in intentos] == ["Ana", "Luis"]
+    cliente.cerrar()
+
+
+def test_obtiene_todas_las_paginas_de_entregas() -> None:
+    cliente = ClienteMoodle("https://aula.test/")
+    paginas = {
+        "mod/assign/view.php?id=15&action=grading&perpage=100": SimpleNamespace(
+            url="https://aula.test/mod/assign/view.php?id=15&action=grading",
+            text="""
+              <table id="submissions"></table>
+              <nav class="pagination">
+                <a href="/mod/assign/view.php?id=15&amp;action=grading&amp;page=1">2</a>
+              </nav>
+            """,
+        ),
+        "https://aula.test/mod/assign/view.php?id=15&action=grading&page=1": (
+            SimpleNamespace(
+                url=(
+                    "https://aula.test/mod/assign/view.php"
+                    "?id=15&action=grading&page=1"
+                ),
+                text='<table id="submissions"></table>',
+            )
+        ),
+    }
+    cliente.obtener = lambda url: paginas[url]  # type: ignore[method-assign]
+
+    resultado = cliente.obtener_paginas_entregas_tarea(15)
+
+    assert len(resultado) == 2
+    assert resultado[1][1].endswith("action=grading&page=1")
     cliente.cerrar()
