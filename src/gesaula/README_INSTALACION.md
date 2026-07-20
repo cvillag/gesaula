@@ -7,7 +7,7 @@
   PySide6 y las demás dependencias adecuadas para el sistema operativo.
 
 Se recomienda instalar la aplicación en un entorno virtual. Sustituye
-`gesaula-0.1.1-py3-none-any.whl` por la ruta real del archivo descargado.
+`gesaula-0.1.2-py3-none-any.whl` por la ruta real del archivo descargado.
 
 ## Windows
 
@@ -16,7 +16,7 @@ Abre PowerShell en la carpeta que contiene el archivo `.whl` y ejecuta:
 ```powershell
 py -m venv .venv-gesaula
 .venv-gesaula\Scripts\python.exe -m pip install --upgrade pip
-.venv-gesaula\Scripts\python.exe -m pip install .\gesaula-0.1.1-py3-none-any.whl
+.venv-gesaula\Scripts\python.exe -m pip install .\gesaula-0.1.2-py3-none-any.whl
 .venv-gesaula\Scripts\gesaula.exe
 ```
 
@@ -29,7 +29,7 @@ Abre una terminal en la carpeta que contiene el archivo `.whl` y ejecuta:
 ```bash
 python3 -m venv .venv-gesaula
 .venv-gesaula/bin/python -m pip install --upgrade pip
-.venv-gesaula/bin/python -m pip install ./gesaula-0.1.1-py3-none-any.whl
+.venv-gesaula/bin/python -m pip install ./gesaula-0.1.2-py3-none-any.whl
 .venv-gesaula/bin/gesaula
 ```
 

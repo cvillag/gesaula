@@ -5,7 +5,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-VERSION="${1:-0.1.1}"
+VERSION="${1:-0.1.2}"
 ARCHITECTURE="${2:-amd64}"
 BINARY="${3:-dist/gesaula.bin}"
 PACKAGE_NAME="gesaula_${VERSION}_${ARCHITECTURE}"
