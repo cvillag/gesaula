@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=gesaula
+Comment=Gestiona acciones sobre un Aula Virtual Moodle
+Exec=gesaula
+Icon=gesaula
+Terminal=false
+Categories=Education;Utility;
+StartupNotify=true

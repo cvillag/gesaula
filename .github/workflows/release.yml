@@ -1,0 +1,101 @@
+name: Publicar paquetes
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Obtener el código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar herramientas de construcción
+        run: python -m pip install . build nuitka patchelf zstandard
+
+      - name: Generar ejecutable Linux
+        run: >-
+          python -m nuitka src/gesaula/main.py
+          --mode=onefile
+          --enable-plugin=pyside6
+          --include-data-dir=src/gesaula/icons=gesaula/icons
+          --noinclude-qt-translations
+          --include-qt-plugins=platforminputcontexts
+          --linux-icon=src/gesaula/icons/logo512.png
+          --output-dir=dist
+          --output-filename=gesaula.bin
+          --assume-yes-for-downloads
+
+      - name: Generar wheel y paquete Debian
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          python -m build --wheel
+          ./scripts/build_deb.sh "$VERSION" amd64 dist/gesaula.bin
+
+      - name: Reunir paquetes Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesaula-linux-amd64
+          path: |
+            dist/gesaula.bin
+            dist/*.deb
+            dist/*.whl
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Obtener el código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Generar gesaula.exe
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+
+      - name: Reunir ejecutable Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesaula-windows-x64
+          path: dist/windows/gesaula.exe
+          if-no-files-found: error
+
+  publish-release:
+    needs:
+      - build-linux
+      - build-windows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar todos los paquetes
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Crear Release de GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME" release/*
+          --title "gesaula $GITHUB_REF_NAME"
+          --generate-notes

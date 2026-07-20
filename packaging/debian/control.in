@@ -1,0 +1,12 @@
+Package: gesaula
+Version: @VERSION@
+Section: education
+Priority: optional
+Architecture: @ARCH@
+Maintainer: cvillag <cvillarroelgonzalez@gmail.com>
+Installed-Size: @INSTALLED_SIZE@
+Depends: libc6 (>= 2.34), libdbus-1-3, libegl1, libfontconfig1, libfreetype6, libgcc-s1, libgl1, libglib2.0-0, libstdc++6, libx11-6, libx11-xcb1, libxkbcommon0, libxkbcommon-x11-0, libxcb1, libxcb-cursor0, libxcb-icccm4, libxcb-image0, libxcb-keysyms1, libxcb-randr0, libxcb-render-util0, libxcb-render0, libxcb-shape0, libxcb-shm0, libxcb-sync1, libxcb-util1, libxcb-xfixes0, libxcb-xkb1, zlib1g
+Homepage: https://github.com/cvillag/gesaula
+Description: Aplicación de escritorio para gestionar acciones sobre Moodle
+ gesaula permite realizar desde una interfaz gráfica acciones controladas
+ sobre un Aula Virtual Moodle utilizando la sesión web del profesorado.
