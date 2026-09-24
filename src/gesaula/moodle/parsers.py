@@ -191,6 +191,32 @@ def extraer_url_level_up(
     return None
 
 
+def extraer_paginas_informe_level_up(
+    html: str,
+    url_pagina: str,
+) -> tuple[str, ...]:
+    """Obtiene enlaces de paginación del mismo informe y servidor."""
+    soup = BeautifulSoup(html, "html.parser")
+    origen = urlparse(url_pagina)
+    paginas: dict[str, None] = {}
+    for enlace in soup.select(".paging a[href], .pagination a[href]"):
+        href = str(enlace["href"])
+        if not href or href.startswith("#"):
+            continue
+        url = urljoin(url_pagina, href)
+        partes = urlparse(url)
+        parametros = parse_qs(partes.query)
+        if (
+            (partes.scheme, partes.netloc, partes.path)
+            != (origen.scheme, origen.netloc, origen.path)
+            or parametros.get("_r") != parse_qs(origen.query).get("_r")
+            or not parametros.get("page", [""])[0].isdigit()
+        ):
+            continue
+        paginas.setdefault(partes._replace(fragment="").geturl(), None)
+    return tuple(paginas)
+
+
 def extraer_alumnos_level_up(html: str) -> tuple[AlumnoLevelUp, ...]:
     """Extrae los alumnos del informe sin depender de identificadores YUI."""
     soup = BeautifulSoup(html, "html.parser")

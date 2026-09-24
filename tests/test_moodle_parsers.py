@@ -12,6 +12,7 @@ from gesaula.moodle.parsers import (
     extraer_numero_intentos_cuestionario,
     extraer_paginas_entregas_tarea,
     extraer_paginas_informe_cuestionario,
+    extraer_paginas_informe_level_up,
     extraer_sesskey,
     extraer_url_level_up,
     extraer_usuario_id,
@@ -260,6 +261,26 @@ def test_extrae_alumnos_del_informe_level_up_y_descarta_fila_plantilla() -> None
     assert alumno.nivel == 3
     assert alumno.px == 1250
     assert alumno.context_id == 85744
+
+
+def test_extrae_paginas_level_up_sin_duplicados_ni_enlaces_ajenos() -> None:
+    html = """
+    <nav class="pagination">
+      <a href="#">Actual</a>
+      <a href="?page=1">2</a>
+      <a href="?page=1#tabla">Siguiente</a>
+      <a href="?page=2">3</a>
+      <a href="?page=no">Inválida</a>
+      <a href="/blocks/xp/index.php/report/999?page=1">Otro curso</a>
+      <a href="https://otro.test/blocks/xp/index.php/report/1203?page=1">Otro sitio</a>
+    </nav>
+    <a href="?page=3">Fuera de la paginación</a>
+    """
+    url = "https://aula.test/blocks/xp/index.php/report/1203"
+
+    assert extraer_paginas_informe_level_up(html, url) == (
+        f"{url}?page=1", f"{url}?page=2",
+    )
 
 
 def test_no_confunde_otra_tabla_con_el_informe_level_up() -> None:

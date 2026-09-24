@@ -34,6 +34,7 @@ from gesaula.moodle.parsers import (
     extraer_numero_intentos_cuestionario,
     extraer_paginas_entregas_tarea,
     extraer_paginas_informe_cuestionario,
+    extraer_paginas_informe_level_up,
     extraer_sesskey,
     extraer_url_level_up,
     extraer_usuario_id,
@@ -140,9 +141,26 @@ class ClienteMoodle:
         )
 
     def obtener_alumnos_level_up(self, url_informe: str) -> tuple[AlumnoLevelUp, ...]:
-        """Obtiene nombre, nivel y puntos de los alumnos del informe."""
-        respuesta = self.obtener(url_informe)
-        return extraer_alumnos_level_up(respuesta.text)
+        """Obtiene todo el informe antes de permitir modificaciones de PX."""
+        pendientes = [url_informe]
+        visitadas: set[str] = set()
+        alumnos: dict[int, AlumnoLevelUp] = {}
+        while pendientes:
+            url = pendientes.pop(0)
+            if url in visitadas:
+                continue
+            respuesta = self.obtener(url)
+            url_final = str(respuesta.url)
+            visitadas.add(url)
+            if url_final != url and url_final in visitadas:
+                continue
+            visitadas.add(url_final)
+            for alumno in extraer_alumnos_level_up(respuesta.text):
+                alumnos.setdefault(alumno.id, alumno)
+            for pagina in extraer_paginas_informe_level_up(respuesta.text, url_final):
+                if pagina not in visitadas and pagina not in pendientes:
+                    pendientes.append(pagina)
+        return tuple(alumnos.values())
 
     def obtener_actividades_descargables(
         self,

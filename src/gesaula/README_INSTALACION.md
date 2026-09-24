@@ -1,4 +1,18 @@
-# Instalación de gesaula desde el archivo wheel
+# Instalación de gesaula
+
+## Paquetes de escritorio
+
+- Windows x64: abre `gesaula_0.1.4_x64.msi`. Instala la aplicación para todos los
+  usuarios (requiere permisos de administrador) y añade un acceso al menú Inicio.
+  Las futuras versiones MSI reemplazan la instalación anterior. Un `.exe` portátil
+  descargado anteriormente no se elimina automáticamente.
+- Debian/Ubuntu amd64: ejecuta `sudo apt install ./gesaula_0.1.4_amd64.deb`.
+- También está disponible `gesaula.exe` como ejecutable portátil para Windows.
+
+Cierra la aplicación antes de actualizar. Estos paquetes no requieren instalar
+Python. Para desinstalar el MSI, utiliza la lista de aplicaciones de Windows.
+
+## Instalación alternativa desde el archivo wheel
 
 ## Requisitos
 
@@ -7,7 +21,7 @@
   PySide6 y las demás dependencias adecuadas para el sistema operativo.
 
 Se recomienda instalar la aplicación en un entorno virtual. Sustituye
-`gesaula-0.1.3-py3-none-any.whl` por la ruta real del archivo descargado.
+`gesaula-0.1.4-py3-none-any.whl` por la ruta real del archivo descargado.
 
 ## Windows
 
@@ -16,7 +30,7 @@ Abre PowerShell en la carpeta que contiene el archivo `.whl` y ejecuta:
 ```powershell
 py -m venv .venv-gesaula
 .venv-gesaula\Scripts\python.exe -m pip install --upgrade pip
-.venv-gesaula\Scripts\python.exe -m pip install .\gesaula-0.1.3-py3-none-any.whl
+.venv-gesaula\Scripts\python.exe -m pip install .\gesaula-0.1.4-py3-none-any.whl
 .venv-gesaula\Scripts\gesaula.exe
 ```
 
@@ -29,7 +43,7 @@ Abre una terminal en la carpeta que contiene el archivo `.whl` y ejecuta:
 ```bash
 python3 -m venv .venv-gesaula
 .venv-gesaula/bin/python -m pip install --upgrade pip
-.venv-gesaula/bin/python -m pip install ./gesaula-0.1.3-py3-none-any.whl
+.venv-gesaula/bin/python -m pip install ./gesaula-0.1.4-py3-none-any.whl
 .venv-gesaula/bin/gesaula
 ```
 

@@ -72,11 +72,21 @@ jobs:
         shell: pwsh
         run: ./scripts/build_windows.ps1
 
-      - name: Reunir ejecutable Windows
+      - name: Generar instalador MSI
+        shell: pwsh
+        run: ./scripts/build_msi.ps1
+
+      - name: Comprobar instalación y desinstalación MSI
+        shell: pwsh
+        run: ./scripts/test_msi.ps1
+
+      - name: Reunir paquetes Windows
         uses: actions/upload-artifact@v4
         with:
           name: gesaula-windows-x64
-          path: dist/windows/gesaula.exe
+          path: |
+            dist/windows/gesaula.exe
+            dist/windows/*.msi
           if-no-files-found: error
 
   publish-release:

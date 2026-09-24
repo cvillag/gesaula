@@ -1,0 +1,24 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="gesaula" Manufacturer="gesaula" Version="$(var.Version)"
+           UpgradeCode="7E0DC124-F272-47FD-B8D5-83F77131E9D4" Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="Ya hay una versión más reciente de gesaula instalada." />
+    <MediaTemplate EmbedCab="yes" />
+    <Icon Id="GesaulaIcon" SourceFile="build/gesaula.ico" />
+    <Property Id="ARPPRODUCTICON" Value="GesaulaIcon" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="gesaula">
+        <Component Id="GesaulaExecutable" Guid="*">
+          <File Id="GesaulaExe" Source="dist/windows/gesaula.exe" KeyPath="yes">
+            <Shortcut Id="GesaulaStartMenu" Directory="ProgramMenuFolder"
+                      Name="gesaula" Advertise="yes" WorkingDirectory="INSTALLFOLDER"
+                      Icon="GesaulaIcon" />
+          </File>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+    <Feature Id="MainFeature" Title="gesaula" Level="1">
+      <ComponentRef Id="GesaulaExecutable" />
+    </Feature>
+  </Package>
+</Wix>
