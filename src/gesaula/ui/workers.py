@@ -678,6 +678,7 @@ class SenalesAplicarCalificaciones(SenalesOperacionMoodle):
     """Comunica el avance de una actualización de PX por lotes."""
 
     preparada = Signal(int, int)
+    sin_coincidencia = Signal(object, bool)
     progreso = Signal(int, int, str)
     completada = Signal(int, int)
     preparacion_fallida = Signal(str)
@@ -727,6 +728,14 @@ class AplicarCalificacionesLevelUp(QRunnable):
             )
         except ErrorPreparacionCalificaciones as error:
             self.senales.preparacion_fallida.emit(str(error))
+            self.senales.finalizada.emit(self)
+            return
+
+        self.senales.sin_coincidencia.emit(
+            plan.alumnos_sin_coincidencia,
+            self.seleccion.omitir_no_encontrados,
+        )
+        if plan.alumnos_sin_coincidencia and not self.seleccion.omitir_no_encontrados:
             self.senales.finalizada.emit(self)
             return
 

@@ -394,8 +394,9 @@ class VentanaPrincipal(QMainWindow):
         ):
             return
 
-        self._dialogo_calificaciones_activo = dialogo
-        dialogo.finished.connect(self._finalizar_dialogo_calificaciones)
+        if self._dialogo_calificaciones_activo is not dialogo:
+            self._dialogo_calificaciones_activo = dialogo
+            dialogo.finished.connect(self._finalizar_dialogo_calificaciones)
         dialogo.iniciar_preparacion()
         trabajo = AplicarCalificacionesLevelUp(
             self.cliente_moodle,
@@ -405,6 +406,7 @@ class VentanaPrincipal(QMainWindow):
             seleccion,
         )
         trabajo.senales.preparada.connect(dialogo.iniciar_proceso)
+        trabajo.senales.sin_coincidencia.connect(dialogo.mostrar_sin_coincidencia)
         trabajo.senales.preparacion_fallida.connect(
             dialogo.mostrar_error_preparacion
         )

@@ -79,6 +79,7 @@ class SeleccionCalificaciones:
 
     columnas: tuple[ColumnaCalificacion, ...]
     multiplicador: int
+    omitir_no_encontrados: bool = False
 
 
 @dataclass(frozen=True)
@@ -93,11 +94,20 @@ class IncrementoExperiencia:
 
 
 @dataclass(frozen=True)
+class AlumnoSinCoincidencia:
+    """Alumno ausente de Level up y PX que le corresponderían."""
+
+    nombre: str
+    incremento: int
+
+
+@dataclass(frozen=True)
 class PlanCalificaciones:
     """Actualizaciones validadas antes de modificar Moodle."""
 
     incrementos: tuple[IncrementoExperiencia, ...]
     alumnos_sin_calificacion: int
+    alumnos_sin_coincidencia: tuple[AlumnoSinCoincidencia, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -209,7 +219,7 @@ def preparar_plan_calificaciones(
 
     incrementos: list[IncrementoExperiencia] = []
     sin_calificacion = 0
-    sin_coincidencia = 0
+    sin_coincidencia: list[AlumnoSinCoincidencia] = []
     ambiguos = 0
     sin_contexto = 0
     for alumno_ods, nombre_normalizado in zip(
@@ -234,17 +244,19 @@ def preparar_plan_calificaciones(
             continue
 
         alumno_moodle = moodle_por_nombre.get(nombre_normalizado)
+        incremento = sum(
+            ceil(nota * seleccion.multiplicador)
+            for nota in notas_presentes
+        )
         if alumno_moodle is None:
-            sin_coincidencia += 1
+            sin_coincidencia.append(
+                AlumnoSinCoincidencia(alumno_ods.nombre_completo, incremento)
+            )
             continue
         if alumno_moodle.context_id is None:
             sin_contexto += 1
             continue
 
-        incremento = sum(
-            ceil(nota * seleccion.multiplicador)
-            for nota in notas_presentes
-        )
         if incremento <= 0:
             sin_calificacion += 1
             continue
@@ -259,8 +271,6 @@ def preparar_plan_calificaciones(
         )
 
     problemas = []
-    if sin_coincidencia:
-        problemas.append(f"{sin_coincidencia} sin coincidencia en Level up")
     if ambiguos:
         problemas.append(f"{ambiguos} con nombre duplicado o ambiguo")
     if sin_contexto:
@@ -269,13 +279,14 @@ def preparar_plan_calificaciones(
         raise ErrorPreparacionCalificaciones(
             "No se puede iniciar la actualización: " + "; ".join(problemas) + "."
         )
-    if not incrementos:
+    if not incrementos and not sin_coincidencia:
         raise ErrorPreparacionCalificaciones(
             "Ningún alumno tiene calificaciones numéricas en las columnas seleccionadas."
         )
     return PlanCalificaciones(
         incrementos=tuple(incrementos),
         alumnos_sin_calificacion=sin_calificacion,
+        alumnos_sin_coincidencia=tuple(sin_coincidencia),
     )
 
 

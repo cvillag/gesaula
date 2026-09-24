@@ -15,6 +15,9 @@ La primera versión se centrará en:
 - Buscar cursos disponibles para el usuario.
 - Mostrar el estado de conexión, cursos accesibles y errores relevantes.
 - Consultar el informe de Level up y sumar PX al alumnado.
+- Importar calificaciones ODS: si faltan alumnos en Level up, se puede confirmar
+  «Hacerlo de todas formas» para actualizar solo los encontrados. El resumen conserva
+  los nombres y apellidos de los ausentes y los PX que les corresponderían.
 
 ## Fuera de alcance inicial
 

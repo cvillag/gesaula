@@ -145,7 +145,8 @@ def test_calcula_y_suma_cada_columna_redondeada_hacia_arriba() -> None:
     assert plan.alumnos_sin_calificacion == 0
 
 
-def test_no_prepara_escrituras_con_nombres_ambiguos() -> None:
+@pytest.mark.parametrize("confirmar", [False, True])
+def test_no_prepara_escrituras_con_nombres_ambiguos(confirmar: bool) -> None:
     columna = ColumnaCalificacion(3, "Control")
     informe = InformeCalificaciones(
         hoja="Calificaciones",
@@ -159,6 +160,28 @@ def test_no_prepara_escrituras_con_nombres_ambiguos() -> None:
     with pytest.raises(ErrorPreparacionCalificaciones, match="ambiguo"):
         preparar_plan_calificaciones(
             informe,
-            SeleccionCalificaciones((columna,), 10),
+            SeleccionCalificaciones((columna,), 10, omitir_no_encontrados=confirmar),
             (AlumnoLevelUp(42, "Ana Ejemplo", 1, 0, 85744),),
         )
+
+
+def test_conserva_ausentes_y_redondea_cada_columna() -> None:
+    columnas = (ColumnaCalificacion(3, "Control"), ColumnaCalificacion(4, "Examen"))
+    informe = InformeCalificaciones(
+        "Calificaciones",
+        columnas,
+        (
+            AlumnoCalificaciones("María", "Muñoz Pérez", "", (7.21, 6.31)),
+            AlumnoCalificaciones("Luis", "Prueba", "", (None, None)),
+        ),
+    )
+
+    plan = preparar_plan_calificaciones(
+        informe, SeleccionCalificaciones(columnas, 10), (),
+    )
+
+    assert plan.incrementos == ()
+    assert plan.alumnos_sin_calificacion == 1
+    assert [(alumno.nombre, alumno.incremento) for alumno in plan.alumnos_sin_coincidencia] == [
+        ("María Muñoz Pérez", 137),
+    ]

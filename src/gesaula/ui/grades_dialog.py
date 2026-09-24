@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from gesaula.actions.calificaciones_ods import (
+    AlumnoSinCoincidencia,
     ColumnaCalificacion,
     InformeCalificaciones,
     SeleccionCalificaciones,
@@ -82,9 +83,19 @@ class DialogoCalificaciones(QDialog):
         self.progreso.hide()
         self.estado_progreso = QLabel()
         self.estado_progreso.setWordWrap(True)
+        self.lista_omitidos = QListWidget()
+        self.lista_omitidos.hide()
+
+        self.boton_continuar = QPushButton("Hacerlo de todas formas")
+        self.boton_continuar.clicked.connect(lambda: self.aplicar(omitir=True))
+        self.boton_continuar.hide()
+        self.lista_columnas.itemChanged.connect(self.boton_continuar.hide)
+        self.multiplicador.valueChanged.connect(self.boton_continuar.hide)
 
         self.boton_cancelar = QPushButton("Cancelar")
-        self.boton_cancelar.clicked.connect(self.reject)
+        self.boton_cancelar.clicked.connect(
+            lambda: self.accept() if self.proceso_completado else self.reject()
+        )
         self.boton_aplicar = QPushButton("Aplicar")
         self.boton_aplicar.setDefault(True)
         self.boton_aplicar.clicked.connect(self.aplicar)
@@ -92,6 +103,7 @@ class DialogoCalificaciones(QDialog):
         botones = QHBoxLayout()
         botones.addStretch()
         botones.addWidget(self.boton_cancelar)
+        botones.addWidget(self.boton_continuar)
         botones.addWidget(self.boton_aplicar)
 
         disposicion = QVBoxLayout(self)
@@ -102,9 +114,10 @@ class DialogoCalificaciones(QDialog):
         disposicion.addWidget(self.error)
         disposicion.addWidget(self.progreso)
         disposicion.addWidget(self.estado_progreso)
+        disposicion.addWidget(self.lista_omitidos)
         disposicion.addLayout(botones)
 
-    def aplicar(self) -> None:
+    def aplicar(self, *, omitir: bool = False) -> None:
         """Valida la selección y solicita que comience la actualización."""
         columnas: list[ColumnaCalificacion] = []
         for indice in range(self.lista_columnas.count()):
@@ -122,10 +135,32 @@ class DialogoCalificaciones(QDialog):
         self.seleccion = SeleccionCalificaciones(
             columnas=tuple(columnas),
             multiplicador=self.multiplicador.value(),
+            omitir_no_encontrados=omitir,
         )
         self.error.clear()
         self.boton_aplicar.setEnabled(False)
         self.aplicar_solicitado.emit(self.seleccion)
+
+    def mostrar_sin_coincidencia(
+        self, alumnos: tuple[AlumnoSinCoincidencia, ...], confirmado: bool,
+    ) -> None:
+        """Pide confirmación y conserva el detalle de los PX no aplicados."""
+        self.lista_omitidos.clear()
+        self.lista_omitidos.setVisible(bool(alumnos))
+        for alumno in alumnos:
+            self.lista_omitidos.addItem(
+                f"{alumno.nombre} — {alumno.incremento} PX sin aplicar"
+            )
+        if alumnos:
+            mensaje = (
+                f"{len(alumnos)} alumnos sin coincidencia en Level up. "
+                "Solo se actualizará a los alumnos encontrados."
+            )
+            if confirmado:
+                self.error.setText(mensaje)
+            else:
+                self.mostrar_error_preparacion(mensaje)
+                self.boton_continuar.show()
 
     def mostrar_error_preparacion(self, mensaje: str) -> None:
         """Permite corregir la selección cuando el plan no es seguro."""
@@ -139,6 +174,9 @@ class DialogoCalificaciones(QDialog):
 
     def iniciar_preparacion(self) -> None:
         """Bloquea el diálogo mientras se comprueban los PX actuales."""
+        self.boton_continuar.hide()
+        self.lista_omitidos.clear()
+        self.lista_omitidos.hide()
         self.lista_columnas.setEnabled(False)
         self.multiplicador.setEnabled(False)
         self.boton_aplicar.setEnabled(False)
@@ -188,6 +226,13 @@ class DialogoCalificaciones(QDialog):
         self.estado_progreso.setStyleSheet("color: #16752c;")
         self.estado_progreso.setText("Actualización completada. Recargando Level up…")
         self.proceso_completado = True
+        if self.lista_omitidos.count():
+            self.estado_progreso.setText(
+                "Proceso completado. Los PX de la lista no se han aplicado."
+            )
+            self.boton_cancelar.setText("Cerrar")
+            self.boton_cancelar.setEnabled(True)
+            return
         QTimer.singleShot(250, self.accept)
 
     def mostrar_error_proceso(self, mensaje: str) -> None:

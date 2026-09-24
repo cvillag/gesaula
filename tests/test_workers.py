@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from gesaula.actions.calificaciones_ods import (
     AlumnoCalificaciones,
     ColumnaCalificacion,
@@ -77,7 +79,10 @@ def test_qt_no_autodestruye_trabajos_antes_de_procesar_sus_senales() -> None:
     assert all(not trabajo.autoDelete() for trabajo in trabajos)
 
 
-def test_aplica_calificaciones_en_orden_y_emite_progreso() -> None:
+@pytest.mark.parametrize("ausente, confirmar", [(False, False), (True, False), (True, True)])
+def test_aplica_calificaciones_en_orden_y_emite_progreso(
+    ausente: bool, confirmar: bool,
+) -> None:
     columna = ColumnaCalificacion(3, "Control")
     informe = InformeCalificaciones(
         "Calificaciones",
@@ -96,10 +101,11 @@ def test_aplica_calificaciones_en_orden_y_emite_progreso() -> None:
             self,
             url: str,
         ) -> tuple[AlumnoLevelUp, ...]:
-            return (
+            alumnos = (
                 AlumnoLevelUp(42, "Ana Ejemplo", 1, 100, 85744),
                 AlumnoLevelUp(43, "Luis Prueba", 1, 200, 85744),
             )
+            return alumnos[:1] if ausente else alumnos
 
         def actualizar_px_level_up(
             self,
@@ -115,9 +121,17 @@ def test_aplica_calificaciones_en_orden_y_emite_progreso() -> None:
         1203,
         "https://aula.test/informe",
         informe,
-        SeleccionCalificaciones((columna,), 10),
+        SeleccionCalificaciones((columna,), 10, omitir_no_encontrados=confirmar),
     )
     progresos: list[tuple[int, int, str]] = []
+    omitidos = []
+    completados = []
+    trabajo.senales.sin_coincidencia.connect(
+        lambda alumnos, confirmado: omitidos.append((alumnos, confirmado))
+    )
+    trabajo.senales.completada.connect(
+        lambda curso, total: completados.append(total)
+    )
     trabajo.senales.progreso.connect(
         lambda procesados, total, nombre: progresos.append(
             (procesados, total, nombre)
@@ -125,6 +139,17 @@ def test_aplica_calificaciones_en_orden_y_emite_progreso() -> None:
     )
 
     trabajo.run()
+
+    if ausente:
+        alumnos, confirmado = omitidos[0]
+        assert confirmado == confirmar
+        assert [(alumno.nombre, alumno.incremento) for alumno in alumnos] == [
+            ("Luis Prueba", 50),
+        ]
+        assert cliente.llamadas == ([(42, 85744, 171)] if confirmar else [])
+        assert progresos == ([(1, 1, "Ana Ejemplo")] if confirmar else [])
+        assert completados == ([1] if confirmar else [])
+        return
 
     assert cliente.llamadas == [
         (42, 85744, 171),
